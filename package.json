@@ -1,0 +1,10 @@
+{
+  "name": "promptbooster",
+  "version": "0.1.0",
+  "description": "Manifest V3 browser extension that boosts prompts for LLM chat interfaces.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'No automated tests yet'"
+  }
+}

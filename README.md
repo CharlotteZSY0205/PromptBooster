@@ -108,3 +108,27 @@
 👉 **Summary:**
 This document positions Prompt Booster as a **user-facing productivity tool**, with **Learning Mode as the centerpiece** to encourage deeper thinking. The design emphasizes simplicity (one-click use), clear UX, and minimal configuration, making it straightforward for developers to build an MVP.
 
+---
+
+## 8. Development Quickstart
+
+This repository now contains a Manifest V3 browser extension that implements the PromptBooster MVP described above.
+
+### Load the extension in Chrome
+
+1. Run `npm install` (optional) to set up future tooling, then build assets if needed (no compilation is required for the current MVP).
+2. Open `chrome://extensions` and enable **Developer mode**.
+3. Click **Load unpacked** and select the project root folder.
+
+### Configure PromptBooster
+
+1. Open the extension options page from the extension card or by navigating to `chrome://extensions`, finding **PromptBooster**, and clicking **Details → Extension options**.
+2. Paste an API key for your preferred OpenAI-compatible provider, confirm the API endpoint URL and model, and select the default optimization mode.
+3. Toggle **Preview boosted prompt before sending** if you want to confirm rewrites before they are submitted automatically.
+
+### Using the extension
+
+1. Visit [https://chat.openai.com](https://chat.openai.com) and type a prompt.
+2. Click **Boost Prompt** to send the text to your configured LLM and replace the input with the optimized version. If preview is enabled, approve the rewrite before the message is auto-submitted.
+3. After sending, the conversation view displays the boosted prompt along with a smaller note that preserves the original wording.
+
