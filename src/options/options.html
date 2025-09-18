@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PromptBooster Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <h1>PromptBooster Settings</h1>
+        <p class="subtitle">
+          Connect your own LLM API and choose how prompts are optimized. Your configuration stays on this device.
+        </p>
+      </header>
+
+      <form id="settings-form" class="card">
+        <section>
+          <h2>API Connection</h2>
+          <label class="field">
+            <span>API key</span>
+            <input type="password" id="apiKey" name="apiKey" autocomplete="off" required />
+            <small>Stored locally using Chrome Sync. Required before you can boost prompts.</small>
+          </label>
+          <label class="field">
+            <span>API endpoint URL</span>
+            <input type="url" id="apiBaseUrl" name="apiBaseUrl" placeholder="https://api.openai.com/v1/chat/completions" />
+            <small>
+              Works with OpenAI-compatible chat completion APIs. Adjust if your provider uses a different endpoint.
+            </small>
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input type="text" id="model" name="model" placeholder="gpt-4o-mini" />
+          </label>
+        </section>
+
+        <section>
+          <h2>Prompt Mode</h2>
+          <label class="field">
+            <span>Default optimization style</span>
+            <select id="defaultMode" name="defaultMode"></select>
+            <small>Learning Mode is recommended for new users.</small>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="previewBeforeSend" name="previewBeforeSend" />
+            <span>Preview boosted prompt before sending</span>
+          </label>
+        </section>
+
+        <footer class="form-footer">
+          <button type="submit" class="primary">Save changes</button>
+          <p id="status" role="status"></p>
+        </footer>
+      </form>
+
+      <section class="help card">
+        <h2>How to use PromptBooster</h2>
+        <ol>
+          <li>Paste your API key above. PromptBooster never sends traffic without it.</li>
+          <li>Open ChatGPT and look for the new <strong>Boost Prompt</strong> button next to Send.</li>
+          <li>Select preview mode if you want to review the rewrite before it is auto-submitted.</li>
+        </ol>
+        <p class="disclaimer">
+          Reminder: your prompts are sent directly from the browser to the API provider you configure here. PromptBooster does
+          not operate any servers or store your data.
+        </p>
+      </section>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
