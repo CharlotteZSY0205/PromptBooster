@@ -62,6 +62,22 @@ function dbg(...args) {
   } catch {}
 }
 
+// Expose minimal debug helpers
+try {
+  window.PromptBoosterDebug = {
+    getSettings: () => ({ ...currentSettings }),
+    forceEnsure: () => {
+      dbg('forceEnsure invoked');
+      try {
+        ensureModeButtons();
+        ensureBoostButton();
+      } catch (e) {
+        dbg('forceEnsure error', e);
+      }
+    }
+  };
+} catch {}
+
 init();
 
 function init() {
@@ -74,19 +90,34 @@ function init() {
 
 async function loadSettings() {
   currentSettings = await getSettings();
+  dbg('settings loaded', {
+    defaultMode: currentSettings?.defaultMode,
+    previewBeforeSend: currentSettings?.previewBeforeSend,
+    itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0,
+    bindings: currentSettings?.bindings
+  });
   updateButtonTooltip();
 }
 
 function setupSettingsObserver() {
   observeSettings((settings) => {
     currentSettings = settings;
+    dbg('settings changed', {
+      defaultMode: currentSettings?.defaultMode,
+      previewBeforeSend: currentSettings?.previewBeforeSend,
+      itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0,
+      bindings: currentSettings?.bindings
+    });
     updateButtonTooltip();
+    // re-render mode buttons on settings change
+    try { ensureModeButtons(); } catch {}
   });
 }
 
 function setupComposerObserver() {
   const observer = new MutationObserver(() => {
     ensureBoostButton();
+    ensureModeButtons();
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
@@ -94,12 +125,14 @@ function setupComposerObserver() {
   const start = Date.now();
   const retry = setInterval(() => {
     ensureBoostButton();
+    ensureModeButtons();
     if (Date.now() - start > 10000) {
       clearInterval(retry);
     }
   }, 300);
 
   ensureBoostButton();
+  ensureModeButtons();
 }
 
 function setupMessageObserver() {
@@ -208,6 +241,139 @@ function ensureBoostButton() {
   }
 }
 
+/* ========= Mode Buttons (Replace / Append) ========= */
+
+function ensureModeButtons() {
+  try {
+    dbg('ensureModeButtons start');
+    const container = findLeadingContainer();
+    if (!container) {
+      dbg('leading container not found yet');
+      return;
+    }
+
+    // find existing host
+    let host = container.querySelector('.promptbooster-modes');
+    if (!host) {
+      host = document.createElement('div');
+      host.className = 'promptbooster-modes';
+      // Prepend to leading container so it's leftmost
+      container.prepend(host);
+      dbg('created mode host in leading container');
+    } else {
+      dbg('mode host exists');
+    }
+
+    renderModeButtons(host);
+  } catch (e) {
+    dbg('ensureModeButtons error', e);
+  }
+}
+
+// Leading area container (top-left of composer)
+function findLeadingContainer(root = document) {
+  // ChatGPT uses a grid area marker like [grid-area:leading]
+  // Inside that, there is often a flex wrapper with existing icons
+  const area = root.querySelector('[class*="[grid-area:leading]"]');
+  if (!area) {
+    dbg('leading area not found');
+    return null;
+  }
+  // Prefer a direct flex child if available; otherwise, use the area itself
+  const inner = area.querySelector('.flex') || area;
+  dbg('leading container ready', { className: inner?.className || '(area)' });
+  return inner;
+}
+
+function renderModeButtons(host) {
+  const settings = currentSettings || {};
+  const items = Array.isArray(settings.items) ? settings.items : [];
+  const bindings = Array.isArray(settings.bindings) ? settings.bindings.slice(0, 3) : [];
+
+  dbg('renderModeButtons', {
+    itemsCount: items.length,
+    bindings,
+    sampleItems: items.slice(0, 3).map(x => ({ id: x.id, type: x.type, name: x.name }))
+  });
+
+  // Build a map for quick lookup
+  const byId = new Map(items.map(it => [it.id, it]));
+
+  // Create the three buttons based on bindings
+  const buttons = bindings
+    .map(id => byId.get(id))
+    .filter(Boolean)
+    .slice(0, 3);
+
+  dbg('resolved buttons', buttons.map(b => ({ type: b.type, name: b.name })));
+
+  // Serialize current buttons to avoid unnecessary re-render
+  const currentSig = host.getAttribute('data-sig');
+  const nextSig = JSON.stringify(buttons.map(b => `${b.type}:${b.name}`));
+  if (currentSig === nextSig && host.children.length > 0) {
+    dbg('mode buttons signature unchanged; skipping render');
+    return;
+  }
+  host.setAttribute('data-sig', nextSig);
+
+  host.innerHTML = '';
+  if (buttons.length === 0) {
+    dbg('no bound buttons to render');
+  }
+  for (const item of buttons) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pb-mode-btn';
+    btn.setAttribute('data-type', item.type);
+    btn.setAttribute('title', `${item.type === 'replace' ? 'Replace prompt' : 'Append to prompt'}: ${item.name}`);
+    btn.innerHTML = `
+      <span class="pb-mode-icon">${item.type === 'replace' ? '🔄' : '➕'}</span>
+      <span class="pb-mode-label">${escapeHtml(item.name)}</span>
+    `;
+    btn.addEventListener('click', () => onModeButtonClick(item));
+    host.appendChild(btn);
+  }
+}
+
+function onModeButtonClick(item) {
+  dbg('mode button click', { type: item?.type, name: item?.name, contentLen: (item?.content || '').length });
+  const editor = findEditor();
+  if (!editor) {
+    dbg('composer not found on click');
+    showToast('Composer not found.');
+    return;
+  }
+  const current = readPrompt();
+  let nextText = current || '';
+
+  if (item.type === 'replace') {
+    nextText = String(item.content || '').trim();
+  } else {
+    const add = String(item.content || '').trim();
+    if (!add) {
+      dbg('append content empty');
+      showToast('Empty append content.');
+      return;
+    }
+    // Append with a separating newline if current text exists
+    nextText = nextText ? `${nextText}\n${add}` : add;
+  }
+
+  const ok = writePrompt(nextText);
+  dbg('writePrompt result', ok, { prevLen: (current || '').length, nextLen: nextText.length });
+  if (!ok) {
+    showToast('Unable to update the chat input field.');
+    return;
+  }
+
+  // Auto-send after applying
+  setTimeout(() => {
+    dbg('auto-sending after mode apply');
+    sendPrompt();
+  }, 80);
+}
+
+/* ========= Existing composer helpers ========= */
 function findComposer() {
   const composerSelectors = [
     'form[data-type="unified-composer"]',
@@ -408,94 +574,127 @@ function showPreview({ originalPrompt, optimizedPrompt }) {
     return;
   }
 
-  // Build a modal overlay appended to <body> to avoid ChatGPT composer event interference
-  const overlay = document.createElement('div');
-  overlay.className = 'promptbooster-modal';
-  overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-modal', 'true');
-  overlay.tabIndex = -1;
-  overlay.innerHTML = `
-    <div class="promptbooster-modal__backdrop"></div>
-    <div class="promptbooster-modal__panel promptbooster-preview">
-      <div class="promptbooster-preview__header">Preview boosted prompt</div>
-      <div class="promptbooster-preview__content">
-        <section>
-          <h4>Original</h4>
-          <p>${escapeHtml(originalPrompt)}</p>
-        </section>
-        <section>
-          <h4>Edit boosted</h4>
+  const inline = document.createElement('div');
+  inline.className = 'promptbooster-inline';
+  inline.setAttribute('data-collapsed', 'false');
+  inline.innerHTML = `
+    <div class="pb-inline__header">
+      <button type="button" class="pb-inline__toggle" data-action="toggle" aria-expanded="true" aria-controls="pb-inline-content">
+        ▼ Prompt Review
+      </button>
+    </div>
+    <div class="pb-inline__content" id="pb-inline-content">
+      <section class="pb-col">
+        <h4>Original</h4>
+        <div class="pb-box">
+          <pre class="pb-text">${escapeHtml(originalPrompt)}</pre>
+        </div>
+      </section>
+      <section class="pb-col">
+        <h4>Boosted</h4>
+        <div class="pb-box">
           <div class="promptbooster-editable" contenteditable="true" role="textbox" aria-multiline="true" data-testid="promptbooster-edit">${escapeHtml(optimizedPrompt)}</div>
-        </section>
-      </div>
-      <div class="promptbooster-preview__actions">
-        <button type="button" class="promptbooster-secondary" data-action="cancel">Keep original</button>
-        <button type="button" class="promptbooster-primary" data-action="apply">Send boosted</button>
-      </div>
+        </div>
+      </section>
+    </div>
+    <div class="pb-inline__footer">
+      <button type="button" class="promptbooster-secondary" data-action="use-original">Use Original</button>
+      <button type="button" class="promptbooster-primary" data-action="use-boosted">Use Boosted</button>
     </div>
   `;
-  const preview = overlay.querySelector('.promptbooster-preview');
 
-  // Make the inline editor truly editable without the page intercepting keys
-  const editBox = preview.querySelector('[data-testid="promptbooster-edit"]');
+  // Insert above the main editor area if possible, otherwise prepend to composer
+  const firstChild = composer.firstElementChild;
+  if (firstChild) {
+    composer.insertBefore(inline, firstChild);
+  } else {
+    composer.appendChild(inline);
+  }
+
+  // Stop ChatGPT composer from intercepting keystrokes within our editable box
+  const editBox = inline.querySelector('[data-testid="promptbooster-edit"]');
   if (editBox) {
     editBox.addEventListener('keydown', (e) => {
-      // prevent the ChatGPT form/global handlers from hijacking keys
       e.stopPropagation();
-      // Allow Shift+Enter for newline; Enter alone inserts line break without submitting form
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        try {
-          document.execCommand('insertLineBreak');
-        } catch {}
+        try { document.execCommand('insertLineBreak'); } catch {}
       }
     }, { capture: true });
-    editBox.addEventListener('paste', (e) => {
-      e.stopPropagation();
-    }, { capture: true });
-    // Focus the editor so user can type immediately
+    editBox.addEventListener('paste', (e) => { e.stopPropagation(); }, { capture: true });
     setTimeout(() => { try { editBox.focus(); } catch {} }, 0);
   }
 
-  // Global key handling for the modal (stop propagation and support Escape)
-  overlay.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      removeExistingPreview();
-      writePrompt(originalPrompt);
-      setProcessingState(false);
-    }
-  }, { capture: true });
-
-  // Click on backdrop cancels
-  overlay.querySelector('.promptbooster-modal__backdrop').addEventListener('click', () => {
-    removeExistingPreview();
-    writePrompt(originalPrompt);
-    setProcessingState(false);
+  // Expand/Collapse
+  inline.querySelector('[data-action="toggle"]').addEventListener('click', (e) => {
+    const collapsed = inline.getAttribute('data-collapsed') === 'true';
+    inline.setAttribute('data-collapsed', collapsed ? 'false' : 'true');
+    e.currentTarget.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
   });
 
-  preview.querySelector('[data-action="cancel"]').addEventListener('click', () => {
+  // Use Original
+  inline.querySelector('[data-action="use-original"]').addEventListener('click', () => {
     removeExistingPreview();
-    writePrompt(originalPrompt);
-    setProcessingState(false);
+    applyOptimizedPrompt({ originalPrompt, optimizedPrompt: originalPrompt, autoSend: true });
   });
 
-  preview.querySelector('[data-action="apply"]').addEventListener('click', () => {
-    const editedEl = preview.querySelector('[data-testid="promptbooster-edit"]');
+  // Use Boosted (take edited content if changed)
+  inline.querySelector('[data-action="use-boosted"]').addEventListener('click', () => {
+    const editedEl = inline.querySelector('[data-testid="promptbooster-edit"]');
     const edited = editedEl ? (editedEl.innerText || editedEl.textContent || '').trim() : optimizedPrompt;
     removeExistingPreview();
     applyOptimizedPrompt({ originalPrompt, optimizedPrompt: edited || optimizedPrompt, autoSend: true });
   });
 
-  document.body.appendChild(overlay);
-  // Focus overlay so keyboard stays within modal
-  setTimeout(() => { try { overlay.focus(); } catch {} }, 0);
+  // Collapse+remove animation when native ChatGPT Send is used
+  const nativeSendBtn = findSendButton();
+  const editorRef = findEditor();
+
+  function collapseAndRemove() {
+    const el = inline;
+    // Measure current height and set fixed height to enable transition
+    const h = el.offsetHeight;
+    el.style.height = h + 'px';
+    el.style.opacity = '1';
+    el.style.overflow = 'hidden';
+    // Force reflow
+    void el.offsetHeight;
+    // Animate to 0 height and fade out
+    el.style.transition = 'height 200ms ease, opacity 180ms ease';
+    el.style.height = '0px';
+    el.style.opacity = '0';
+    // Remove after animation
+    setTimeout(() => {
+      try { el.remove(); } catch {}
+    }, 250);
+  }
+
+  const onNativeClick = () => collapseAndRemove();
+  const onEditorEnter = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      collapseAndRemove();
+    }
+  };
+
+  if (nativeSendBtn) nativeSendBtn.addEventListener('click', onNativeClick, { once: true });
+  if (editorRef?.el) editorRef.el.addEventListener('keydown', onEditorEnter, { capture: true });
+
+  // Cleanup for listeners when panel is removed
+  inline.__pbCleanup = () => {
+    try {
+      if (nativeSendBtn) nativeSendBtn.removeEventListener('click', onNativeClick);
+      if (editorRef?.el) editorRef.el.removeEventListener('keydown', onEditorEnter, { capture: true });
+    } catch {}
+  };
+
   setProcessingState(false);
 }
 
 function removeExistingPreview() {
-  document.querySelectorAll('.promptbooster-modal, .promptbooster-preview').forEach((node) => node.remove());
+  document.querySelectorAll('.promptbooster-modal, .promptbooster-preview, .promptbooster-inline').forEach((node) => {
+    try { node.__pbCleanup?.(); } catch {}
+    node.remove();
+  });
 }
 
 function setProcessingState(state) {
@@ -583,6 +782,56 @@ function injectStyles() {
     }
     .promptbooster-button:not(:disabled):hover {
       transform: translateY(-1px);
+    }
+
+    /* Mode buttons (top-left of composer) */
+    .promptbooster-modes {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-right: 8px;
+    }
+    .pb-mode-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(124, 77, 255, 0.35);
+      background: rgba(124, 77, 255, 0.08);
+      color: #4338ca;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+      white-space: nowrap;
+    }
+    .pb-mode-btn:hover {
+      background: rgba(124, 77, 255, 0.14);
+      transform: translateY(-1px);
+      border-color: rgba(124, 77, 255, 0.5);
+    }
+    .pb-mode-btn .pb-mode-icon {
+      font-size: 13px;
+      line-height: 1;
+    }
+    .pb-mode-btn[data-type="replace"] {
+      background: rgba(59, 130, 246, 0.10);
+      border-color: rgba(59, 130, 246, 0.35);
+      color: #1d4ed8;
+    }
+    .pb-mode-btn[data-type="replace"]:hover {
+      background: rgba(59, 130, 246, 0.16);
+      border-color: rgba(59, 130, 246, 0.5);
+    }
+    .pb-mode-btn[data-type="append"] {
+      background: rgba(16, 185, 129, 0.10);
+      border-color: rgba(16, 185, 129, 0.35);
+      color: #047857;
+    }
+    .pb-mode-btn[data-type="append"]:hover {
+      background: rgba(16, 185, 129, 0.16);
+      border-color: rgba(16, 185, 129, 0.5);
     }
     .promptbooster-original-note {
       margin-top: 8px;
@@ -703,6 +952,84 @@ function injectStyles() {
     .promptbooster-toast--hide {
       opacity: 0;
       transform: translateY(6px);
+    }
+
+    /* Inline comparison panel above composer */
+    .promptbooster-inline {
+      margin: 8px 0 10px 0;
+      border: 1px solid rgba(124, 77, 255, 0.2);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 6px 20px rgba(28, 27, 74, 0.10);
+    }
+    .pb-inline__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(124, 77, 255, 0.15);
+    }
+    .pb-inline__toggle {
+      appearance: none;
+      background: transparent;
+      border: none;
+      color: #4338ca;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 4px 6px;
+    }
+    .promptbooster-inline[data-collapsed="true"] .pb-inline__content {
+      display: none;
+    }
+    .pb-inline__content {
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      align-items: stretch; /* make columns equal height based on tallest */
+    }
+    .pb-col {
+      display: flex;
+      flex-direction: column;
+      min-height: 160px; /* base height */
+    }
+    .pb-col h4 {
+      margin: 0 0 6px 0;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #4338ca;
+    }
+    .pb-box {
+      flex: 1; /* fill remaining height so both columns equalize */
+      display: flex; /* allow inner content to flex to equal height */
+      height: 100%;
+    }
+    .pb-text {
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(124, 77, 255, 0.06);
+      color: #1f2937;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      flex: 1;             /* fill the equalized height */
+      max-height: 480px;   /* allow taller content before scrolling */
+      overflow: auto;
+    }
+    /* Ensure the editable fills the equalized height when inside inline panel */
+    .promptbooster-inline .promptbooster-editable {
+      min-height: 0;
+      flex: 1;          /* fill equalized height */
+      overflow: auto;
+      max-height: 480px;
+    }
+    .pb-inline__footer {
+      border-top: 1px solid rgba(124, 77, 255, 0.15);
+      padding: 8px 12px 12px 12px;
+      display: flex;
+      gap: 12px; /* 150% of previous 8px */
+      justify-content: flex-end;
     }
 
     /* Modal overlay for preview */
