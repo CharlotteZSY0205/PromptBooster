@@ -27,7 +27,41 @@ export const DEFAULT_SETTINGS = {
   apiBaseUrl: 'https://api.openai.com/v1/chat/completions',
   model: 'gpt-4o-mini',
   defaultMode: MODES.learning.id,
-  previewBeforeSend: false
+  previewBeforeSend: false,
+  // Quick mode items for top-left composer buttons
+  // type: 'replace' overwrites the input; type: 'append' adds to the end
+  items: [
+    {
+      id: 'replace_creative',
+      type: 'replace',
+      name: 'Creative',
+      content:
+        'You are a creative writing partner. Transform my idea into a more imaginative, surprising exploration. Ask 2–3 clarifying questions and propose 3 angles before drafting. Then outline next steps I should take.'
+    },
+    {
+      id: 'replace_structured',
+      type: 'replace',
+      name: 'Structured',
+      content:
+        'Help me structure this task. Break it into steps, define inputs/outputs per step, and list risks/assumptions. Ask any clarifying questions you need first.'
+    },
+    {
+      id: 'append_wechat_cn',
+      type: 'append',
+      name: 'WeChat Translation',
+      content:
+        'Translate the final answer into Chinese with a friendly, conversational tone suitable for WeChat.'
+    },
+    {
+      id: 'append_refs',
+      type: 'append',
+      name: 'Add Sources',
+      content:
+        'Add 3–5 reputable sources with links; if uncertain, state uncertainty clearly.'
+    }
+  ],
+  // Up to 3 bound items appear as quick buttons (left to right)
+  bindings: ['replace_creative', 'append_wechat_cn', 'append_refs']
 };
 
 export const STORAGE_KEY = 'promptBoosterSettings';

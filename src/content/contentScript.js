@@ -31,7 +31,39 @@ const DEFAULT_SETTINGS = {
   apiBaseUrl: 'https://api.openai.com/v1/chat/completions',
   model: 'gpt-4o-mini',
   defaultMode: MODES.learning.id,
-  previewBeforeSend: false
+  previewBeforeSend: false,
+  // Seed sample items/bindings so mode buttons can render without Options UI
+  items: [
+    {
+      id: 'replace_creative',
+      type: 'replace',
+      name: 'Creative',
+      content:
+        'You are a creative writing partner. Transform my idea into a more imaginative, surprising exploration. Ask 2–3 clarifying questions and propose 3 angles before drafting. Then outline next steps I should take.'
+    },
+    {
+      id: 'replace_structured',
+      type: 'replace',
+      name: 'Structured',
+      content:
+        'Help me structure this task. Break it into steps, define inputs/outputs per step, and list risks/assumptions. Ask any clarifying questions you need first.'
+    },
+    {
+      id: 'append_wechat_cn',
+      type: 'append',
+      name: 'WeChat Translation',
+      content:
+        'Translate the final answer into Chinese with a friendly, conversational tone suitable for WeChat.'
+    },
+    {
+      id: 'append_refs',
+      type: 'append',
+      name: 'Add Sources',
+      content:
+        'Add 3–5 reputable sources with links; if uncertain, state uncertainty clearly.'
+    }
+  ],
+  bindings: ['replace_creative', 'append_wechat_cn', 'append_refs']
 };
 
 const STORAGE_KEY = 'promptBoosterSettings';
@@ -47,6 +79,14 @@ function observeSettings(callback) {
     const { newValue } = changes[STORAGE_KEY];
     callback({ ...DEFAULT_SETTINGS, ...(newValue || {}) });
   });
+}
+
+// Minimal save helper for content script (no import)
+async function saveSettings(partialUpdate) {
+  const stored = await getSettings();
+  const next = { ...stored, ...partialUpdate };
+  await chrome.storage.sync.set({ [STORAGE_KEY]: next });
+  return next;
 }
 
 let currentSettings = { ...DEFAULT_SETTINGS };
@@ -90,6 +130,25 @@ function init() {
 
 async function loadSettings() {
   currentSettings = await getSettings();
+
+  // Seed defaults if items/bindings missing so buttons can render
+  let needsSave = false;
+  const seeded = { ...currentSettings };
+  if (!Array.isArray(seeded.items) || seeded.items.length === 0) {
+    seeded.items = DEFAULT_SETTINGS.items;
+    needsSave = true;
+  }
+  if (!Array.isArray(seeded.bindings) || seeded.bindings.length === 0) {
+    seeded.bindings = DEFAULT_SETTINGS.bindings;
+    needsSave = true;
+  }
+  if (needsSave) {
+    currentSettings = await saveSettings(seeded);
+    dbg('migrated defaults for mode items/bindings');
+  } else {
+    currentSettings = seeded;
+  }
+
   dbg('settings loaded', {
     defaultMode: currentSettings?.defaultMode,
     previewBeforeSend: currentSettings?.previewBeforeSend,
@@ -97,6 +156,7 @@ async function loadSettings() {
     bindings: currentSettings?.bindings
   });
   updateButtonTooltip();
+  try { ensureModeButtons(); } catch {}
 }
 
 function setupSettingsObserver() {
@@ -246,9 +306,9 @@ function ensureBoostButton() {
 function ensureModeButtons() {
   try {
     dbg('ensureModeButtons start');
-    const container = findLeadingContainer();
+    const container = findHeaderContainer() || findLeadingContainer();
     if (!container) {
-      dbg('leading container not found yet');
+      dbg('header/leading container not found yet');
       return;
     }
 
@@ -283,6 +343,37 @@ function findLeadingContainer(root = document) {
   const inner = area.querySelector('.flex') || area;
   dbg('leading container ready', { className: inner?.className || '(area)' });
   return inner;
+}
+
+// Header area (top row above the editor) — preferred placement for mode buttons
+function findHeaderContainer(root = document) {
+  const area = root.querySelector('[class*="[grid-area:header]"]');
+  if (!area) {
+    dbg('header area not found');
+    return null;
+  }
+  // In some builds header contains a single row; use the area directly
+  dbg('header container ready', { className: area?.className || '(area)' });
+  return area;
+}
+
+function getModeIcon(type) {
+  if (type === 'replace') {
+    // Circular swap arrows
+    return `
+      <svg class="pb-icon" width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M6.5 5h7M13.5 5l-2-2M13.5 5l-2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M13.5 15h-7M6.5 15l2 2M6.5 15l2-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `;
+  }
+  // Append: plus inside circle
+  return `
+    <svg class="pb-icon" width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="7.4" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M10 6.5v7M6.5 10h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+  `;
 }
 
 function renderModeButtons(host) {
@@ -327,7 +418,7 @@ function renderModeButtons(host) {
     btn.setAttribute('data-type', item.type);
     btn.setAttribute('title', `${item.type === 'replace' ? 'Replace prompt' : 'Append to prompt'}: ${item.name}`);
     btn.innerHTML = `
-      <span class="pb-mode-icon">${item.type === 'replace' ? '🔄' : '➕'}</span>
+      ${getModeIcon(item.type)}
       <span class="pb-mode-label">${escapeHtml(item.name)}</span>
     `;
     btn.addEventListener('click', () => onModeButtonClick(item));
@@ -811,8 +902,10 @@ function injectStyles() {
       transform: translateY(-1px);
       border-color: rgba(124, 77, 255, 0.5);
     }
-    .pb-mode-btn .pb-mode-icon {
-      font-size: 13px;
+    .pb-mode-btn .pb-icon {
+      width: 14px;
+      height: 14px;
+      display: inline-block;
       line-height: 1;
     }
     .pb-mode-btn[data-type="replace"] {
