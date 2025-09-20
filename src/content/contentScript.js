@@ -1,11 +1,66 @@
-import { DEFAULT_SETTINGS, MODES } from '../common/constants.js';
-import { getSettings, observeSettings } from '../common/storage.js';
+/**
+ * Inline constants and storage utilities to avoid ESM imports in MV3 content scripts.
+ * Content scripts are classic scripts and cannot use `import` syntax.
+ */
+const MODES = {
+  learning: {
+    id: 'learning',
+    label: 'Learning Mode',
+    description:
+      'Encourages deep, reflective thinking with clarifying questions and reasoning guidance.'
+  },
+  structured: {
+    id: 'structured',
+    label: 'Structured Mode',
+    description: 'Adds a step-by-step structure with organized reasoning and summaries.'
+  },
+  concise: {
+    id: 'concise',
+    label: 'Concise Mode',
+    description: 'Makes the prompt shorter, clearer, and more precise without losing intent.'
+  },
+  creative: {
+    id: 'creative',
+    label: 'Creative Mode',
+    description: 'Expands the prompt with brainstorming and divergent thinking elements.'
+  }
+};
+
+const DEFAULT_SETTINGS = {
+  apiKey: '',
+  apiBaseUrl: 'https://api.openai.com/v1/chat/completions',
+  model: 'gpt-4o-mini',
+  defaultMode: MODES.learning.id,
+  previewBeforeSend: false
+};
+
+const STORAGE_KEY = 'promptBoosterSettings';
+
+async function getSettings() {
+  const stored = await chrome.storage.sync.get(STORAGE_KEY);
+  return { ...DEFAULT_SETTINGS, ...(stored[STORAGE_KEY] || {}) };
+}
+
+function observeSettings(callback) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'sync' || !changes[STORAGE_KEY]) return;
+    const { newValue } = changes[STORAGE_KEY];
+    callback({ ...DEFAULT_SETTINGS, ...(newValue || {}) });
+  });
+}
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let isProcessing = false;
 let boostButton = null;
 const pendingHistory = [];
 const annotatedBubbles = new WeakSet();
+
+const DEBUG = true;
+function dbg(...args) {
+  try {
+    if (DEBUG) console.debug('[PromptBooster]', ...args);
+  } catch {}
+}
 
 init();
 
@@ -34,6 +89,16 @@ function setupComposerObserver() {
     ensureBoostButton();
   });
   observer.observe(document.body, { childList: true, subtree: true });
+
+  // Retry for a short window on fresh loads
+  const start = Date.now();
+  const retry = setInterval(() => {
+    ensureBoostButton();
+    if (Date.now() - start > 10000) {
+      clearInterval(retry);
+    }
+  }, 300);
+
   ensureBoostButton();
 }
 
@@ -95,34 +160,57 @@ function appendOriginalPrompt(container, originalText) {
 }
 
 function ensureBoostButton() {
-  const composer = findComposer();
-  if (!composer) {
-    return;
-  }
-
-  const sendButton = findSendButton(composer);
-  if (!sendButton) {
-    return;
-  }
+  const sendButton = findSendButton();
+  const trailingContainer = findTrailingContainer();
 
   if (!boostButton) {
     boostButton = document.createElement('button');
     boostButton.type = 'button';
     boostButton.className = 'promptbooster-button';
     boostButton.textContent = 'Boost Prompt';
+    boostButton.setAttribute('data-testid', 'promptbooster-boost-btn');
     boostButton.addEventListener('click', onBoostClick);
     updateButtonTooltip();
   }
 
-  if (boostButton.isConnected) {
-    return;
+  // Prefer to place immediately before the send button when it exists
+  if (sendButton) {
+    const parent = sendButton.parentElement;
+    if (!parent) {
+      dbg('send button has no parent, cannot insert');
+      return;
+    }
+    if (boostButton.isConnected && boostButton.parentElement === parent) {
+      return;
+    }
+    try {
+      parent.insertBefore(boostButton, sendButton);
+      dbg('inserted Boost button before send button');
+      return;
+    } catch (e) {
+      dbg('failed to insert before send button', e);
+    }
   }
 
-  sendButton.parentElement?.insertBefore(boostButton, sendButton);
+  // Fallback: append into the trailing container so it is visible even before send exists
+  if (trailingContainer) {
+    if (boostButton.isConnected && boostButton.parentElement === trailingContainer) {
+      return;
+    }
+    try {
+      trailingContainer.appendChild(boostButton);
+      dbg('appended Boost button into trailing container (fallback)');
+    } catch (e) {
+      dbg('failed to append into trailing container', e);
+    }
+  } else {
+    dbg('trailing container not found yet');
+  }
 }
 
 function findComposer() {
   const composerSelectors = [
+    'form[data-type="unified-composer"]',
     'form[data-testid="conversation-compose"]',
     'form[method="post"]'
   ];
@@ -137,27 +225,107 @@ function findComposer() {
 
 function findSendButton(root = document) {
   return (
+    root.querySelector('#composer-submit-button') ||
     root.querySelector('button[data-testid="send-button"]') ||
+    root.querySelector('button[aria-label="Send prompt"]') ||
     root.querySelector('button[aria-label="Send message"]') ||
+    root.querySelector('button.composer-submit-btn') ||
     root.querySelector('button[type="submit"]')
   );
 }
 
-function findTextarea() {
-  return document.querySelector('textarea');
+// Try to locate the trailing action container of the composer to host our button
+function findTrailingContainer(root = document) {
+  // The trailing area container often has a class literal like [grid-area:trailing]
+  const area = root.querySelector('[class*="[grid-area:trailing]"]');
+  if (!area) return null;
+
+  // Inside it there is usually an inner flex container with the send button and icons
+  const inner = area.querySelector('.ms-auto') || area.querySelector('.flex') || area;
+  return inner || area;
+}
+
+function findEditor() {
+  // Prefer ChatGPT's ProseMirror contenteditable editor
+  const prosemirror = document.querySelector('div#prompt-textarea.ProseMirror[contenteditable="true"]');
+  if (prosemirror) {
+    return { type: 'prosemirror', el: prosemirror };
+  }
+  // Fallback to a visible textarea (older UIs)
+  const visibleTextarea = document.querySelector('textarea:not([style*="display: none"])') || document.querySelector('textarea[name="prompt-textarea"]');
+  if (visibleTextarea) {
+    return { type: 'textarea', el: visibleTextarea };
+  }
+  return null;
+}
+
+function readPrompt() {
+  const editor = findEditor();
+  if (!editor) return '';
+  if (editor.type === 'prosemirror') {
+    return (editor.el.textContent || '').trim();
+  }
+  return (editor.el.value || '').trim();
+}
+
+// Ensure ProseMirror DOM reflects our text and caret is placed at end
+function setProseMirrorContent(el, text) {
+  const lines = String(text ?? '').split(/\n/);
+  const html = lines.map(l => `<p>${escapeHtml(l) || '<br>'}</p>`).join('');
+  el.innerHTML = html;
+  try {
+    placeCaretAtEnd(el);
+  } catch {}
+}
+
+function placeCaretAtEnd(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection?.();
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+}
+
+function writePrompt(text) {
+  const editor = findEditor();
+  if (!editor) return false;
+
+  if (editor.type === 'prosemirror') {
+    const el = editor.el;
+    try {
+      el.focus();
+      // Replace entire content via execCommand (some PM setups listen to this)
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, text);
+    } catch {}
+    // Ensure DOM matches expected ProseMirror structure and caret is correct
+    setProseMirrorContent(el, text);
+    // Fire events that frameworks often listen for
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    // Sync fallback textarea if present
+    const fb = document.querySelector('textarea[name="prompt-textarea"]');
+    if (fb) {
+      fb.value = text;
+      fb.dispatchEvent(new Event('input', { bubbles: true }));
+      fb.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return true;
+  } else {
+    editor.el.value = text;
+    editor.el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
 }
 
 function onBoostClick() {
   if (isProcessing) {
     return;
   }
-  const textarea = findTextarea();
-  if (!textarea) {
-    showToast('Unable to find the chat input field.');
-    return;
-  }
-
-  const originalPrompt = textarea.value.trim();
+  const originalPrompt = readPrompt();
   if (!originalPrompt) {
     showToast('Type a prompt first, then click Boost Prompt.');
     return;
@@ -193,24 +361,22 @@ function onBoostClick() {
 }
 
 function applyOptimizedPrompt({ originalPrompt, optimizedPrompt, autoSend }) {
-  const textarea = findTextarea();
-  if (!textarea) {
+  const ok = writePrompt(optimizedPrompt);
+  if (!ok) {
     showToast('Unable to update the chat input field.');
     setProcessingState(false);
     return;
   }
 
-  textarea.value = optimizedPrompt;
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-
   pendingHistory.push({ original: originalPrompt, optimized: optimizedPrompt });
 
   if (autoSend) {
-    sendPrompt();
-    setProcessingState(false);
-  } else {
-    setProcessingState(false);
+    // Give the app a brief moment to process the input changes before sending
+    setTimeout(() => {
+      sendPrompt();
+    }, 100);
   }
+  setProcessingState(false);
 }
 
 function sendPrompt() {
@@ -220,8 +386,8 @@ function sendPrompt() {
     return;
   }
 
-  const textarea = findTextarea();
-  if (!textarea) {
+  const editor = findEditor();
+  if (!editor?.el) {
     return;
   }
   const keyboardEvent = new KeyboardEvent('keydown', {
@@ -231,7 +397,7 @@ function sendPrompt() {
     keyCode: 13,
     bubbles: true
   });
-  textarea.dispatchEvent(keyboardEvent);
+  editor.el.dispatchEvent(keyboardEvent);
 }
 
 function showPreview({ originalPrompt, optimizedPrompt }) {
@@ -242,47 +408,94 @@ function showPreview({ originalPrompt, optimizedPrompt }) {
     return;
   }
 
-  const preview = document.createElement('div');
-  preview.className = 'promptbooster-preview';
-  preview.innerHTML = `
-    <div class="promptbooster-preview__header">Preview boosted prompt</div>
-    <div class="promptbooster-preview__content">
-      <section>
-        <h4>Original</h4>
-        <p>${escapeHtml(originalPrompt)}</p>
-      </section>
-      <section>
-        <h4>Boosted</h4>
-        <p>${escapeHtml(optimizedPrompt)}</p>
-      </section>
-    </div>
-    <div class="promptbooster-preview__actions">
-      <button type="button" class="promptbooster-secondary" data-action="cancel">Keep original</button>
-      <button type="button" class="promptbooster-primary" data-action="apply">Send boosted</button>
+  // Build a modal overlay appended to <body> to avoid ChatGPT composer event interference
+  const overlay = document.createElement('div');
+  overlay.className = 'promptbooster-modal';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.tabIndex = -1;
+  overlay.innerHTML = `
+    <div class="promptbooster-modal__backdrop"></div>
+    <div class="promptbooster-modal__panel promptbooster-preview">
+      <div class="promptbooster-preview__header">Preview boosted prompt</div>
+      <div class="promptbooster-preview__content">
+        <section>
+          <h4>Original</h4>
+          <p>${escapeHtml(originalPrompt)}</p>
+        </section>
+        <section>
+          <h4>Edit boosted</h4>
+          <div class="promptbooster-editable" contenteditable="true" role="textbox" aria-multiline="true" data-testid="promptbooster-edit">${escapeHtml(optimizedPrompt)}</div>
+        </section>
+      </div>
+      <div class="promptbooster-preview__actions">
+        <button type="button" class="promptbooster-secondary" data-action="cancel">Keep original</button>
+        <button type="button" class="promptbooster-primary" data-action="apply">Send boosted</button>
+      </div>
     </div>
   `;
+  const preview = overlay.querySelector('.promptbooster-preview');
+
+  // Make the inline editor truly editable without the page intercepting keys
+  const editBox = preview.querySelector('[data-testid="promptbooster-edit"]');
+  if (editBox) {
+    editBox.addEventListener('keydown', (e) => {
+      // prevent the ChatGPT form/global handlers from hijacking keys
+      e.stopPropagation();
+      // Allow Shift+Enter for newline; Enter alone inserts line break without submitting form
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        try {
+          document.execCommand('insertLineBreak');
+        } catch {}
+      }
+    }, { capture: true });
+    editBox.addEventListener('paste', (e) => {
+      e.stopPropagation();
+    }, { capture: true });
+    // Focus the editor so user can type immediately
+    setTimeout(() => { try { editBox.focus(); } catch {} }, 0);
+  }
+
+  // Global key handling for the modal (stop propagation and support Escape)
+  overlay.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      removeExistingPreview();
+      writePrompt(originalPrompt);
+      setProcessingState(false);
+    }
+  }, { capture: true });
+
+  // Click on backdrop cancels
+  overlay.querySelector('.promptbooster-modal__backdrop').addEventListener('click', () => {
+    removeExistingPreview();
+    writePrompt(originalPrompt);
+    setProcessingState(false);
+  });
 
   preview.querySelector('[data-action="cancel"]').addEventListener('click', () => {
     removeExistingPreview();
-    const textarea = findTextarea();
-    if (textarea) {
-      textarea.value = originalPrompt;
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    writePrompt(originalPrompt);
     setProcessingState(false);
   });
 
   preview.querySelector('[data-action="apply"]').addEventListener('click', () => {
+    const editedEl = preview.querySelector('[data-testid="promptbooster-edit"]');
+    const edited = editedEl ? (editedEl.innerText || editedEl.textContent || '').trim() : optimizedPrompt;
     removeExistingPreview();
-    applyOptimizedPrompt({ originalPrompt, optimizedPrompt, autoSend: true });
+    applyOptimizedPrompt({ originalPrompt, optimizedPrompt: edited || optimizedPrompt, autoSend: true });
   });
 
-  composer.appendChild(preview);
+  document.body.appendChild(overlay);
+  // Focus overlay so keyboard stays within modal
+  setTimeout(() => { try { overlay.focus(); } catch {} }, 0);
   setProcessingState(false);
 }
 
 function removeExistingPreview() {
-  document.querySelectorAll('.promptbooster-preview').forEach((node) => node.remove());
+  document.querySelectorAll('.promptbooster-modal, .promptbooster-preview').forEach((node) => node.remove());
 }
 
 function setProcessingState(state) {
@@ -347,15 +560,20 @@ function injectStyles() {
   style.id = 'promptbooster-style';
   style.textContent = `
     .promptbooster-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-width: 110px;
+      height: 36px;
       background: linear-gradient(90deg, #7c4dff, #3f51b5);
       color: #fff;
       border: none;
       border-radius: 6px;
-      padding: 0 16px;
+      padding: 0 12px;
       margin-right: 8px;
       font-weight: 600;
       cursor: pointer;
-      height: 36px;
       transition: transform 0.2s ease, opacity 0.2s ease;
     }
     .promptbooster-button:disabled {
@@ -393,6 +611,7 @@ function injectStyles() {
       flex-direction: column;
       gap: 12px;
       z-index: 50;
+      pointer-events: auto;
     }
     .promptbooster-preview__header {
       font-weight: 600;
@@ -422,6 +641,25 @@ function injectStyles() {
       margin: 0;
       white-space: pre-wrap;
       line-height: 1.5;
+    }
+    .promptbooster-editable {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      font: inherit;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(124, 77, 255, 0.35);
+      background: #fff;
+      color: #1f2937;
+      outline: none;
+      box-sizing: border-box;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .promptbooster-editable:focus {
+      border-color: #7c4dff;
+      box-shadow: 0 0 0 3px rgba(124, 77, 255, 0.15);
     }
     .promptbooster-preview__actions {
       display: flex;
@@ -465,6 +703,28 @@ function injectStyles() {
     .promptbooster-toast--hide {
       opacity: 0;
       transform: translateY(6px);
+    }
+
+    /* Modal overlay for preview */
+    .promptbooster-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483646;
+      display: grid;
+      place-items: center;
+    }
+    .promptbooster-modal__backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      backdrop-filter: blur(2px);
+    }
+    .promptbooster-modal__panel {
+      position: relative;
+      max-width: 720px;
+      width: min(92vw, 720px);
+      max-height: 80vh;
+      overflow: auto;
     }
   `;
   document.head.appendChild(style);
