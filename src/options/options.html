@@ -11,7 +11,7 @@
       <header>
         <h1>PromptBooster Settings</h1>
         <p class="subtitle">
-          Connect your own LLM API and choose how prompts are optimized. Your configuration stays on this device.
+          Connect your LLM API, configure Prompt Review, and manage quick-access buttons (Replace / Append).
         </p>
       </header>
 
@@ -37,30 +37,40 @@
         </section>
 
         <section>
-          <h2>Prompt Mode</h2>
-          <label class="field">
-            <span>Default optimization style</span>
-            <select id="defaultMode" name="defaultMode"></select>
-            <small>Learning Mode is recommended for new users.</small>
-          </label>
+          <h2>Prompt Review</h2>
           <label class="toggle">
             <input type="checkbox" id="previewBeforeSend" name="previewBeforeSend" />
-            <span>Preview boosted prompt before sending</span>
+            <span>Use Prompt Review (inline) before sending</span>
           </label>
         </section>
 
         <footer class="form-footer">
-          <button type="submit" class="primary">Save changes</button>
+          <button type="submit" class="primary">Save connection</button>
           <p id="status" role="status"></p>
         </footer>
       </form>
+
+      <section class="card" id="quick-buttons-config">
+        <div class="section-header">
+          <h2>My Prompts</h2>
+          <button type="button" id="addItemBtn" class="primary outline">Add</button>
+        </div>
+        <p class="subtitle">Manage your Replace and Append prompts. Drag to reorder; top 3 appear as buttons above the input.</p>
+
+        <div class="manager-grid">
+          <div class="manager-left">
+            <p class="top3-hint">The top 3 prompts will appear as buttons above the input box.</p>
+            <div id="itemsList" class="items-list" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
 
       <section class="help card">
         <h2>How to use PromptBooster</h2>
         <ol>
           <li>Paste your API key above. PromptBooster never sends traffic without it.</li>
-          <li>Open ChatGPT and look for the new <strong>Boost Prompt</strong> button next to Send.</li>
-          <li>Select preview mode if you want to review the rewrite before it is auto-submitted.</li>
+          <li>Open ChatGPT and look for the three quick buttons at the top of the input box.</li>
+          <li>Use Prompt Review to compare/edit boosted prompts inline above the composer.</li>
         </ol>
         <p class="disclaimer">
           Reminder: your prompts are sent directly from the browser to the API provider you configure here. PromptBooster does

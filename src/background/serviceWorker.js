@@ -33,9 +33,9 @@ async function handleBoostRequest(payload) {
   }
 
   const settings = await getSettings();
+  // Optimization style has been removed; build messages without a mode
   const messages = buildChatMessages({
-    originalPrompt,
-    modeId: settings.defaultMode
+    originalPrompt
   });
 
   const optimizedPrompt = await callLLM({

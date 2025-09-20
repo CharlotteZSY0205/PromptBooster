@@ -26,7 +26,6 @@ export const DEFAULT_SETTINGS = {
   apiKey: '',
   apiBaseUrl: 'https://api.openai.com/v1/chat/completions',
   model: 'gpt-4o-mini',
-  defaultMode: MODES.learning.id,
   previewBeforeSend: false,
   // Quick mode items for top-left composer buttons
   // type: 'replace' overwrites the input; type: 'append' adds to the end
@@ -59,9 +58,7 @@ export const DEFAULT_SETTINGS = {
       content:
         'Add 3–5 reputable sources with links; if uncertain, state uncertainty clearly.'
     }
-  ],
-  // Up to 3 bound items appear as quick buttons (left to right)
-  bindings: ['replace_creative', 'append_wechat_cn', 'append_refs']
+  ]
 };
 
 export const STORAGE_KEY = 'promptBoosterSettings';

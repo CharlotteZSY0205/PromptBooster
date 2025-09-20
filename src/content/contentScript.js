@@ -30,7 +30,6 @@ const DEFAULT_SETTINGS = {
   apiKey: '',
   apiBaseUrl: 'https://api.openai.com/v1/chat/completions',
   model: 'gpt-4o-mini',
-  defaultMode: MODES.learning.id,
   previewBeforeSend: false,
   // Seed sample items/bindings so mode buttons can render without Options UI
   items: [
@@ -63,7 +62,6 @@ const DEFAULT_SETTINGS = {
         'Add 3–5 reputable sources with links; if uncertain, state uncertainty clearly.'
     }
   ],
-  bindings: ['replace_creative', 'append_wechat_cn', 'append_refs']
 };
 
 const STORAGE_KEY = 'promptBoosterSettings';
@@ -92,6 +90,7 @@ async function saveSettings(partialUpdate) {
 let currentSettings = { ...DEFAULT_SETTINGS };
 let isProcessing = false;
 let boostButton = null;
+let modeButtonsHost = null;
 const pendingHistory = [];
 const annotatedBubbles = new WeakSet();
 
@@ -138,10 +137,6 @@ async function loadSettings() {
     seeded.items = DEFAULT_SETTINGS.items;
     needsSave = true;
   }
-  if (!Array.isArray(seeded.bindings) || seeded.bindings.length === 0) {
-    seeded.bindings = DEFAULT_SETTINGS.bindings;
-    needsSave = true;
-  }
   if (needsSave) {
     currentSettings = await saveSettings(seeded);
     dbg('migrated defaults for mode items/bindings');
@@ -150,10 +145,8 @@ async function loadSettings() {
   }
 
   dbg('settings loaded', {
-    defaultMode: currentSettings?.defaultMode,
     previewBeforeSend: currentSettings?.previewBeforeSend,
-    itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0,
-    bindings: currentSettings?.bindings
+    itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0
   });
   updateButtonTooltip();
   try { ensureModeButtons(); } catch {}
@@ -163,10 +156,8 @@ function setupSettingsObserver() {
   observeSettings((settings) => {
     currentSettings = settings;
     dbg('settings changed', {
-      defaultMode: currentSettings?.defaultMode,
       previewBeforeSend: currentSettings?.previewBeforeSend,
-      itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0,
-      bindings: currentSettings?.bindings
+      itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0
     });
     updateButtonTooltip();
     // re-render mode buttons on settings change
@@ -306,25 +297,67 @@ function ensureBoostButton() {
 function ensureModeButtons() {
   try {
     dbg('ensureModeButtons start');
-    const container = findHeaderContainer() || findLeadingContainer();
-    if (!container) {
-      dbg('header/leading container not found yet');
+
+    const composer = findComposer();
+    if (!composer) {
+      dbg('composer not found yet');
       return;
     }
 
-    // find existing host
-    let host = container.querySelector('.promptbooster-modes');
-    if (!host) {
-      host = document.createElement('div');
-      host.className = 'promptbooster-modes';
-      // Prepend to leading container so it's leftmost
-      container.prepend(host);
-      dbg('created mode host in leading container');
-    } else {
-      dbg('mode host exists');
+    // 1) Try to find the grid root of the composer (the container that uses grid-template-areas)
+    const gridRoot = findComposerGridRoot(composer);
+    let container = null;
+
+    // 2) Prefer a header slot inside the grid. If none exists, create one.
+    if (gridRoot) {
+      container = ensureHeaderSlot(gridRoot);
+      if (!container) {
+        dbg('failed to ensure header slot');
+      }
     }
 
-    renderModeButtons(host);
+    // 3) As a fallback, use the explicit header container if present
+    if (!container) {
+      container = findHeaderContainer(composer);
+    }
+
+    // 4) Final fallback: prepend into composer form so it appears above the composer UI (still outside the editor)
+    if (!container) {
+      container = composer;
+    }
+
+    if (!container) {
+      dbg('no suitable container for mode buttons yet');
+      return;
+    }
+
+    dbg('mode container target (header slot preferred)', {
+      nodeName: container?.nodeName,
+      className: container?.className
+    });
+
+    // Ensure a single global host; move it if the container changes
+    if (modeButtonsHost && document.contains(modeButtonsHost)) {
+      if (modeButtonsHost.parentElement !== container) {
+        container.prepend(modeButtonsHost);
+        dbg('moved existing mode host to container');
+      }
+    } else {
+      modeButtonsHost = document.createElement('div');
+      modeButtonsHost.className = 'promptbooster-modes';
+      container.prepend(modeButtonsHost);
+      dbg('created mode host in container');
+    }
+
+    // Deduplicate any stray hosts created by dynamic re-renders
+    document.querySelectorAll('.promptbooster-modes').forEach((node) => {
+      if (node !== modeButtonsHost) {
+        try { node.remove(); } catch {}
+      }
+    });
+
+    renderModeButtons(modeButtonsHost);
+    ensureActiveSendWiring();
   } catch (e) {
     dbg('ensureModeButtons error', e);
   }
@@ -345,16 +378,146 @@ function findLeadingContainer(root = document) {
   return inner;
 }
 
-// Header area (top row above the editor) — preferred placement for mode buttons
+/**
+ * Header area (top row above the editor) — preferred placement for mode buttons
+ * Fallback helpers to reliably locate the grid root and ensure a header slot exists.
+ */
 function findHeaderContainer(root = document) {
   const area = root.querySelector('[class*="[grid-area:header]"]');
-  if (!area) {
-    dbg('header area not found');
-    return null;
-  }
-  // In some builds header contains a single row; use the area directly
+  if (!area) return null;
   dbg('header container ready', { className: area?.className || '(area)' });
   return area;
+}
+
+// Try to find the grid container that defines the composer areas (header/leading/primary/trailing)
+function findComposerGridRoot(root = document) {
+  // Look for a DIV that contains a grid-template-areas arbitrary class
+  // Example from ChatGPT DOM: [grid-template-areas:'header_header_header'_'leading_primary_trailing'_...]
+  const grid = root.querySelector('div[class*="[grid-template-areas"]') ||
+               root.querySelector('div.grid[class*="grid-template-areas"]') ||
+               root.querySelector('div[class*="grid"][class*="grid-cols"][class*="template-areas"]');
+  if (grid) {
+    dbg('composer grid root found', { className: grid.className });
+  } else {
+    dbg('composer grid root not found');
+  }
+  return grid || null;
+}
+
+// Ensure a header slot exists inside the grid root and return it
+function ensureHeaderSlot(gridRoot) {
+  let slot = gridRoot.querySelector('.promptbooster-header-slot');
+  if (slot && gridRoot.contains(slot)) {
+    return slot;
+  }
+  // If ChatGPT didn't render a header area child, create our own and map it to the header grid-area
+  slot = document.createElement('div');
+  slot.className = 'promptbooster-header-slot [grid-area:header]';
+  try {
+    gridRoot.insertBefore(slot, gridRoot.firstChild);
+    dbg('created header slot inside grid root');
+  } catch (e) {
+    dbg('failed to insert header slot', e);
+    return null;
+  }
+  return slot;
+}
+
+// Active item helpers: persist which header item is active and apply it on send
+function getActiveItemId() {
+  return currentSettings?.activeItemId || null;
+}
+
+async function setActiveItemId(id) {
+  const next = { ...currentSettings, activeItemId: id || null };
+  currentSettings = await saveSettings(next);
+  try { ensureModeButtons(); } catch {}
+}
+
+function getActiveItem() {
+  const id = getActiveItemId();
+  if (!id) return null;
+  const items = Array.isArray(currentSettings?.items) ? currentSettings.items : [];
+  return items.find(i => i.id === id) || null;
+}
+
+// Apply a specific item immediately to the editor and optionally send
+function applyItemNow(item, { autoSend = true } = {}) {
+  if (!item) return false;
+  const editor = findEditor();
+  if (!editor) {
+    dbg('applyItemNow: composer/editor not found');
+    showToast('Composer not found.');
+    return false;
+  }
+  const current = readPrompt();
+  let nextText = current || '';
+
+  if (item.type === 'replace') {
+    nextText = String(item.content || '').trim();
+  } else {
+    const add = String(item.content || '').trim();
+    if (!add) {
+      dbg('applyItemNow: append content empty');
+      showToast('Empty append content.');
+      return false;
+    }
+    nextText = nextText ? `${nextText}\n${add}` : add;
+  }
+
+  const ok = writePrompt(nextText);
+  dbg('applyItemNow writePrompt', ok, { prevLen: (current || '').length, nextLen: nextText.length });
+  if (!ok) {
+    showToast('Unable to update the chat input field.');
+    return false;
+  }
+  if (autoSend) {
+    setTimeout(() => sendPrompt(), 80);
+  }
+  return true;
+}
+
+let activeSendWired = false;
+function ensureActiveSendWiring() {
+  if (activeSendWired) return;
+  const composer = findComposer();
+  if (!composer) return;
+
+  const sendBtn = findSendButton(composer);
+  const applyActive = () => {
+    const active = getActiveItem();
+    if (!active) return;
+    const current = readPrompt();
+    let nextText = current || '';
+    if (active.type === 'replace') {
+      nextText = String(active.content || '').trim();
+    } else {
+      const add = String(active.content || '').trim();
+      if (!add) return;
+      nextText = nextText ? `${nextText}\n${add}` : add;
+    }
+    writePrompt(nextText);
+  };
+
+  if (sendBtn) {
+    sendBtn.addEventListener('click', applyActive, { capture: true });
+  }
+
+  const editorRef = findEditor();
+  if (editorRef?.el) {
+    editorRef.el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        applyActive();
+      }
+    }, { capture: true });
+  }
+
+  // Also try capturing form submit if present
+  composer.addEventListener('submit', () => {
+    applyActive();
+  }, { capture: true });
+
+  activeSendWired = true;
 }
 
 function getModeIcon(type) {
@@ -379,28 +542,23 @@ function getModeIcon(type) {
 function renderModeButtons(host) {
   const settings = currentSettings || {};
   const items = Array.isArray(settings.items) ? settings.items : [];
-  const bindings = Array.isArray(settings.bindings) ? settings.bindings.slice(0, 3) : [];
+
+  // Use the top-3 items in the user-defined order to render header buttons
+  const buttons = items.slice(0, 3);
 
   dbg('renderModeButtons', {
     itemsCount: items.length,
-    bindings,
-    sampleItems: items.slice(0, 3).map(x => ({ id: x.id, type: x.type, name: x.name }))
+    buttons: buttons.map(b => ({ id: b.id, type: b.type, name: b.name }))
   });
-
-  // Build a map for quick lookup
-  const byId = new Map(items.map(it => [it.id, it]));
-
-  // Create the three buttons based on bindings
-  const buttons = bindings
-    .map(id => byId.get(id))
-    .filter(Boolean)
-    .slice(0, 3);
 
   dbg('resolved buttons', buttons.map(b => ({ type: b.type, name: b.name })));
 
-  // Serialize current buttons to avoid unnecessary re-render
+  // Serialize current buttons + active id to avoid unnecessary re-render
   const currentSig = host.getAttribute('data-sig');
-  const nextSig = JSON.stringify(buttons.map(b => `${b.type}:${b.name}`));
+  const nextSig = JSON.stringify({
+    ids: buttons.map(b => b.id),
+    activeId: getActiveItemId() || null
+  });
   if (currentSig === nextSig && host.children.length > 0) {
     dbg('mode buttons signature unchanged; skipping render');
     return;
@@ -411,10 +569,13 @@ function renderModeButtons(host) {
   if (buttons.length === 0) {
     dbg('no bound buttons to render');
   }
+  const activeId = getActiveItemId();
+
   for (const item of buttons) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pb-mode-btn';
+    if (item.id === activeId) btn.classList.add('active');
     btn.setAttribute('data-type', item.type);
     btn.setAttribute('title', `${item.type === 'replace' ? 'Replace prompt' : 'Append to prompt'}: ${item.name}`);
     btn.innerHTML = `
@@ -424,44 +585,28 @@ function renderModeButtons(host) {
     btn.addEventListener('click', () => onModeButtonClick(item));
     host.appendChild(btn);
   }
+
+  // Clear Active control (only shown when an item is active)
+  if (activeId) {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'pb-clear-active';
+    clearBtn.setAttribute('title', 'Clear active prompt');
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', () => {
+      setActiveItemId(null);
+    });
+    host.appendChild(clearBtn);
+  }
 }
 
 function onModeButtonClick(item) {
-  dbg('mode button click', { type: item?.type, name: item?.name, contentLen: (item?.content || '').length });
-  const editor = findEditor();
-  if (!editor) {
-    dbg('composer not found on click');
-    showToast('Composer not found.');
-    return;
-  }
-  const current = readPrompt();
-  let nextText = current || '';
-
-  if (item.type === 'replace') {
-    nextText = String(item.content || '').trim();
-  } else {
-    const add = String(item.content || '').trim();
-    if (!add) {
-      dbg('append content empty');
-      showToast('Empty append content.');
-      return;
-    }
-    // Append with a separating newline if current text exists
-    nextText = nextText ? `${nextText}\n${add}` : add;
-  }
-
-  const ok = writePrompt(nextText);
-  dbg('writePrompt result', ok, { prevLen: (current || '').length, nextLen: nextText.length });
-  if (!ok) {
-    showToast('Unable to update the chat input field.');
-    return;
-  }
-
-  // Auto-send after applying
-  setTimeout(() => {
-    dbg('auto-sending after mode apply');
-    sendPrompt();
-  }, 80);
+  // Selecting a header button sets it as the active item (persists) AND executes it immediately.
+  dbg('activate and apply header item', { id: item?.id, type: item?.type, name: item?.name });
+  // Apply now (optimistic)
+  applyItemNow(item, { autoSend: true });
+  // Persist selection
+  setActiveItemId(item?.id || null);
 }
 
 /* ========= Existing composer helpers ========= */
@@ -801,8 +946,7 @@ function updateButtonTooltip() {
   if (!boostButton) {
     return;
   }
-  const modeLabel = MODES[currentSettings.defaultMode]?.label || 'Learning Mode';
-  boostButton.title = `Boost prompt with ${modeLabel}`;
+  boostButton.title = 'Boost prompt';
 }
 
 function showToast(message) {
@@ -876,11 +1020,17 @@ function injectStyles() {
     }
 
     /* Mode buttons (top-left of composer) */
+    .promptbooster-header-slot {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-bottom: 4px;
+    }
     .promptbooster-modes {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      margin-right: 8px;
+      margin: 0 8px 6px 0; /* ensure space below when we prepend to composer */
     }
     .pb-mode-btn {
       display: inline-flex;
@@ -925,6 +1075,26 @@ function injectStyles() {
     .pb-mode-btn[data-type="append"]:hover {
       background: rgba(16, 185, 129, 0.16);
       border-color: rgba(16, 185, 129, 0.5);
+    }
+    /* Active selection styling */
+    .pb-mode-btn.active {
+      outline: 2px solid #7c4dff;
+      outline-offset: 0;
+      box-shadow: 0 0 0 3px rgba(124, 77, 255, 0.18);
+    }
+    .pb-clear-active {
+      margin-left: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(107,114,128,0.4);
+      background: rgba(107,114,128,0.1);
+      color: #374151;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .pb-clear-active:hover {
+      background: rgba(107,114,128,0.18);
     }
     .promptbooster-original-note {
       margin-top: 8px;

@@ -1,6 +1,6 @@
 import { MODES } from './constants.js';
 
-function buildInstruction({ originalPrompt, modeId }) {
+function buildInstruction({ originalPrompt }) {
   const baseInstruction = `
 1. rewrite the prompt into an exploratory, scaffolded version that encourages the student to think, plan, or reflect for themselves;
 2. Avoid completing the task on their behalf;
@@ -14,35 +14,14 @@ Your rewrites should support the development of the following student abilities:
 * Incremental learning (e.g., breaking tasks into manageable parts rather than completing them all at once)
 `.trim();
 
-  switch (modeId) {
-    case MODES.structured.id:
-      return (
-        baseInstruction +
-        ' Emphasize step-by-step structure, request organized answers, and encourage summaries after each major step.'
-      );
-    case MODES.concise.id:
-      return (
-        baseInstruction +
-        ' Keep it short and precise, removing redundancy while protecting the original intent and required constraints.'
-      );
-    case MODES.creative.id:
-      return (
-        baseInstruction +
-        ' Encourage imaginative thinking, brainstorming alternatives, and exploring diverse directions relevant to the user\'s goal.'
-      );
-    case MODES.learning.id:
-    default:
-      return (
-        baseInstruction +
-        ' Focus on deep thinking, self-critique, and reflective questioning. Ask for clarifications when helpful and suggest structured reasoning steps.'
-      );
-  }
+  // Optimization styles removed; always use the same base instruction.
+  return baseInstruction;
 }
 
-export function buildChatMessages({ originalPrompt, modeId }) {
+export function buildChatMessages({ originalPrompt }) {
   const systemMessage = {
     role: 'system',
-    content: buildInstruction({ originalPrompt, modeId })
+    content: buildInstruction({ originalPrompt })
   };
 
   const userMessage = {
