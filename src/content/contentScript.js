@@ -357,7 +357,6 @@ function ensureModeButtons() {
     });
 
     renderModeButtons(modeButtonsHost);
-    ensureActiveSendWiring();
   } catch (e) {
     dbg('ensureModeButtons error', e);
   }
@@ -1019,6 +1018,15 @@ function injectStyles() {
       transform: translateY(-1px);
     }
 
+    :root {
+      --pb-brand-50: rgba(124, 77, 255, 0.12);
+      --pb-brand-700: #4338ca;
+      --pb-neutral-bg: #f5f5f7;
+      --pb-text: #374151;
+      --pb-disabled-bg: #f0f0f3;
+      --pb-disabled-text: rgba(55, 65, 81, 0.45);
+      --pb-hover-shadow: 0 2px 8px rgba(28,27,74,0.08);
+    }
     /* Mode buttons (top-left of composer) */
     .promptbooster-header-slot {
       display: flex;
@@ -1036,21 +1044,25 @@ function injectStyles() {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
+      padding: 6px 12px;
       border-radius: 999px;
-      border: 1px solid rgba(124, 77, 255, 0.35);
-      background: rgba(124, 77, 255, 0.08);
-      color: #4338ca;
+      border: 1px solid transparent; /* visually borderless */
+      background: var(--pb-neutral-bg); /* neutral idle */
+      color: var(--pb-text);
       font-weight: 600;
       font-size: 12px;
       cursor: pointer;
-      transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+      transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
       white-space: nowrap;
+      outline: none; /* use focus-visible */
     }
     .pb-mode-btn:hover {
-      background: rgba(124, 77, 255, 0.14);
       transform: translateY(-1px);
-      border-color: rgba(124, 77, 255, 0.5);
+      box-shadow: var(--pb-hover-shadow);
+    }
+    .pb-mode-btn:focus-visible {
+      outline: 2px solid #7c4dff; /* accessible focus ring */
+      outline-offset: 2px;
     }
     .pb-mode-btn .pb-icon {
       width: 14px;
@@ -1058,29 +1070,17 @@ function injectStyles() {
       display: inline-block;
       line-height: 1;
     }
-    .pb-mode-btn[data-type="replace"] {
-      background: rgba(59, 130, 246, 0.10);
-      border-color: rgba(59, 130, 246, 0.35);
-      color: #1d4ed8;
-    }
-    .pb-mode-btn[data-type="replace"]:hover {
-      background: rgba(59, 130, 246, 0.16);
-      border-color: rgba(59, 130, 246, 0.5);
-    }
-    .pb-mode-btn[data-type="append"] {
-      background: rgba(16, 185, 129, 0.10);
-      border-color: rgba(16, 185, 129, 0.35);
-      color: #047857;
-    }
-    .pb-mode-btn[data-type="append"]:hover {
-      background: rgba(16, 185, 129, 0.16);
-      border-color: rgba(16, 185, 129, 0.5);
-    }
     /* Active selection styling */
     .pb-mode-btn.active {
-      outline: 2px solid #7c4dff;
-      outline-offset: 0;
-      box-shadow: 0 0 0 3px rgba(124, 77, 255, 0.18);
+      background: var(--pb-brand-50); /* light brand fill */
+      color: var(--pb-brand-700);     /* darker brand text */
+      box-shadow: inset 0 0 0 1px rgba(124,77,255,0.0); /* subtle inner glow (no visible border) */
+    }
+    .pb-mode-btn:disabled {
+      background: var(--pb-disabled-bg);
+      color: var(--pb-disabled-text);
+      cursor: not-allowed;
+      opacity: 0.7;
     }
     .pb-clear-active {
       margin-left: 8px;
