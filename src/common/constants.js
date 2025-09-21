@@ -28,18 +28,19 @@ export const DEFAULT_SETTINGS = {
   model: 'gpt-4o-mini',
   previewBeforeSend: false,
   // Quick mode items for top-left composer buttons
-  // type: 'replace' overwrites the input; type: 'append' adds to the end
+  // type: 'boosted' sends a rewrite rule to the LLM to generate a boosted prompt
+  // type: 'append' adds the rule text to the end of the input
   items: [
     {
       id: 'replace_creative',
-      type: 'replace',
+      type: 'boosted',
       name: 'Creative',
       content:
         'You are a creative writing partner. Transform my idea into a more imaginative, surprising exploration. Ask 2–3 clarifying questions and propose 3 angles before drafting. Then outline next steps I should take.'
     },
     {
       id: 'replace_structured',
-      type: 'replace',
+      type: 'boosted',
       name: 'Structured',
       content:
         'Help me structure this task. Break it into steps, define inputs/outputs per step, and list risks/assumptions. Ask any clarifying questions you need first.'

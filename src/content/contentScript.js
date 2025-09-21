@@ -35,14 +35,14 @@ const DEFAULT_SETTINGS = {
   items: [
     {
       id: 'replace_creative',
-      type: 'replace',
+      type: 'boosted',
       name: 'Creative',
       content:
         'You are a creative writing partner. Transform my idea into a more imaginative, surprising exploration. Ask 2–3 clarifying questions and propose 3 angles before drafting. Then outline next steps I should take.'
     },
     {
       id: 'replace_structured',
-      type: 'replace',
+      type: 'boosted',
       name: 'Structured',
       content:
         'Help me structure this task. Break it into steps, define inputs/outputs per step, and list risks/assumptions. Ask any clarifying questions you need first.'
@@ -144,6 +144,17 @@ async function loadSettings() {
     currentSettings = seeded;
   }
 
+  // Migrate legacy item types: 'replace' -> 'boosted'
+  try {
+    if (Array.isArray(currentSettings.items)) {
+      const migrated = currentSettings.items.map(i => (i && i.type === 'replace') ? { ...i, type: 'boosted' } : i);
+      const changed = JSON.stringify(migrated) !== JSON.stringify(currentSettings.items);
+      if (changed) {
+        currentSettings = await saveSettings({ ...currentSettings, items: migrated });
+      }
+    }
+  } catch {}
+
   dbg('settings loaded', {
     previewBeforeSend: currentSettings?.previewBeforeSend,
     itemsCount: Array.isArray(currentSettings?.items) ? currentSettings.items.length : 0
@@ -171,12 +182,15 @@ function setupComposerObserver() {
     ensureModeButtons();
   });
   observer.observe(document.body, { childList: true, subtree: true });
+  // Ensure Enter-key interception wiring is present
+  try { ensureEnterWiring(); } catch {}
 
   // Retry for a short window on fresh loads
   const start = Date.now();
   const retry = setInterval(() => {
     ensureBoostButton();
     ensureModeButtons();
+    try { ensureEnterWiring(); } catch {}
     if (Date.now() - start > 10000) {
       clearInterval(retry);
     }
@@ -184,6 +198,7 @@ function setupComposerObserver() {
 
   ensureBoostButton();
   ensureModeButtons();
+  try { ensureEnterWiring(); } catch {}
 }
 
 function setupMessageObserver() {
@@ -440,6 +455,165 @@ function getActiveItem() {
   return items.find(i => i.id === id) || null;
 }
 
+// Intercept Enter to send boosted/appended prompt when a mode is selected
+function ensureEnterWiring() {
+  // Global capture listeners to preempt native handlers that may fire before editor-level listeners
+  if (!document.__pbDocEnterWired) {
+    const globalHandler = (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+
+      const active = getActiveItem();
+      if (!active) return; // no selection -> let native proceed
+
+      const composer = findComposer();
+      if (composer && !composer.contains(e.target)) return; // only intercept events within composer
+
+      // Intercept native behaviour at the earliest point
+      e.preventDefault();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      e.stopPropagation();
+
+      const originalPrompt = readPrompt() || '';
+      const content = String(active.content || '').trim();
+
+      let finalText = '';
+      if (active.type === 'append') {
+        if (!content) {
+          showToast('Selected Append item is empty.');
+          return;
+        }
+        finalText = originalPrompt ? `${originalPrompt}\n${content}` : content;
+      } else {
+        finalText = content;
+      }
+
+      const ok = writePrompt(finalText);
+      if (!ok) {
+        showToast('Unable to update the chat input field.');
+        return;
+      }
+
+      // Map original->optimized for bubble annotation
+      pendingHistory.push({ original: originalPrompt, optimized: finalText });
+
+      // Prevent any immediate native submit; then send after input events propagate
+      if (composer) {
+        composer.addEventListener('submit', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }, { capture: true, once: true });
+      }
+      setTimeout(() => { sendPrompt(); }, 120);
+    };
+
+    // Capture on both document and window to beat most listeners
+    document.addEventListener('keydown', globalHandler, { capture: true });
+    window.addEventListener('keydown', globalHandler, { capture: true });
+
+    // Guard extra phases some UIs listen on
+    const swallow = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && getActiveItem()) {
+        e.preventDefault();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener('keypress', swallow, { capture: true });
+    document.addEventListener('keyup', swallow, { capture: true });
+
+    document.__pbDocEnterWired = true;
+  }
+
+  const editorRef = findEditor();
+  if (!editorRef?.el) return;
+
+  // Avoid double-wiring on dynamic re-renders
+  if (editorRef.el.__pbEnterWired) return;
+
+  const handler = (e) => {
+    // Only intercept plain Enter (no Shift), and only when a mode is selected
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+
+    const active = getActiveItem();
+    if (!active) return; // no selection -> let native send proceed
+
+    // Prevent native send; we will compose and send according to the selected mode
+    e.preventDefault();
+    e.stopPropagation();
+
+    const originalPrompt = readPrompt() || '';
+    const content = String(active.content || '').trim();
+
+    if (active.type === 'append') {
+      if (!content) {
+        showToast('Selected Append item is empty.');
+        return;
+      }
+      const finalText = originalPrompt ? `${originalPrompt}\n${content}` : content;
+      const ok = writePrompt(finalText);
+      if (!ok) {
+        showToast('Unable to update the chat input field.');
+        return;
+      }
+      pendingHistory.push({ original: originalPrompt, optimized: finalText });
+      const composer = findComposer();
+      if (composer) {
+        composer.addEventListener('submit', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }, { capture: true, once: true });
+      }
+      setTimeout(() => { sendPrompt(); }, 120);
+      return;
+    }
+
+    // Boosted: call LLM to generate boosted prompt, then preview-or-send
+    setProcessingState(true);
+    chrome.runtime.sendMessage(
+      { type: 'BOOST_PROMPT', payload: { originalPrompt, rule: content } },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('PromptBooster messaging error:', chrome.runtime.lastError);
+          showToast('Prompt boosting failed to start. Try again in a moment.');
+          setProcessingState(false);
+          return;
+        }
+        if (!response?.ok) {
+          showToast(response?.error || 'Prompt boosting failed.');
+          setProcessingState(false);
+          return;
+        }
+        const boosted = String(response.optimizedPrompt || '');
+
+        if (currentSettings.previewBeforeSend) {
+          showPreview({ originalPrompt, optimizedPrompt: boosted, itemType: 'boosted', sendAfterChoice: true });
+          return;
+        }
+
+        const ok2 = writePrompt(boosted);
+        if (!ok2) {
+          showToast('Unable to update the chat input field.');
+          setProcessingState(false);
+          return;
+        }
+        pendingHistory.push({ original: originalPrompt, optimized: boosted });
+        const composer = findComposer();
+        if (composer) {
+          composer.addEventListener('submit', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+          }, { capture: true, once: true });
+        }
+        setTimeout(() => { sendPrompt(); setProcessingState(false); }, 120);
+      }
+    );
+  };
+
+  editorRef.el.addEventListener('keydown', handler, { capture: true });
+  // mark element to avoid duplicate listeners if the editor persists across reflows
+  editorRef.el.__pbEnterWired = true;
+}
+
 // Apply a specific item immediately to the editor and optionally send
 function applyItemNow(item, { autoSend = true } = {}) {
   if (!item) return false;
@@ -483,45 +657,99 @@ function ensureActiveSendWiring() {
   if (!composer) return;
 
   const sendBtn = findSendButton(composer);
-  const applyActive = () => {
+  const editorRef = findEditor();
+
+  const intercept = (e) => {
     const active = getActiveItem();
-    if (!active) return;
-    const current = readPrompt();
-    let nextText = current || '';
-    if (active.type === 'replace') {
-      nextText = String(active.content || '').trim();
-    } else {
+    if (!active) return; // No selection -> let native send proceed
+
+    // Intercept native send
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+
+    if (active.type === 'append') {
+      // Append immediately and auto-send
+      const current = readPrompt();
       const add = String(active.content || '').trim();
-      if (!add) return;
-      nextText = nextText ? `${nextText}\n${add}` : add;
+      const nextText = current ? (add ? `${current}\n${add}` : current) : add;
+      const ok = writePrompt(nextText);
+      if (!ok) {
+        showToast('Unable to update the chat input field.');
+        return;
+      }
+      sendPrompt();
+      return;
     }
-    writePrompt(nextText);
+
+    // Replace -> call LLM
+    const originalPrompt = readPrompt() || '';
+    if (currentSettings.previewBeforeSend) {
+      setProcessingState(true);
+      chrome.runtime.sendMessage(
+        { type: 'BOOST_PROMPT', payload: { originalPrompt } },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('PromptBooster messaging error:', chrome.runtime.lastError);
+            showToast('Prompt boosting failed to start. Try again in a moment.');
+            setProcessingState(false);
+            return;
+          }
+          if (!response?.ok) {
+            showToast(response?.error || 'Prompt boosting failed.');
+            setProcessingState(false);
+            return;
+          }
+          const optimizedPrompt = String(response.optimizedPrompt || '');
+          // Show comparison panel; on choice, send afterwards
+          showPreview({ originalPrompt, optimizedPrompt, itemType: 'replace', sendAfterChoice: true });
+        }
+      );
+    } else {
+      // No preview: replace immediately and auto-send
+      setProcessingState(true);
+      chrome.runtime.sendMessage(
+        { type: 'BOOST_PROMPT', payload: { originalPrompt } },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('PromptBooster messaging error:', chrome.runtime.lastError);
+            showToast('Prompt boosting failed to start. Try again in a moment.');
+            setProcessingState(false);
+            return;
+          }
+          if (!response?.ok) {
+            showToast(response?.error || 'Prompt boosting failed.');
+            setProcessingState(false);
+            return;
+          }
+          const optimizedPrompt = String(response.optimizedPrompt || '');
+          applyOptimizedPrompt({ originalPrompt, optimizedPrompt, itemType: 'replace', autoSend: true });
+        }
+      );
+    }
   };
 
   if (sendBtn) {
-    sendBtn.addEventListener('click', applyActive, { capture: true });
+    sendBtn.addEventListener('click', intercept, { capture: true });
   }
 
-  const editorRef = findEditor();
   if (editorRef?.el) {
     editorRef.el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
-        applyActive();
+        intercept(e);
       }
     }, { capture: true });
   }
 
-  // Also try capturing form submit if present
-  composer.addEventListener('submit', () => {
-    applyActive();
+  composer.addEventListener('submit', (e) => {
+    intercept(e);
   }, { capture: true });
 
   activeSendWired = true;
 }
 
 function getModeIcon(type) {
-  if (type === 'replace') {
-    // Circular swap arrows
+  // Boosted (previously "replace"): circular swap arrows
+  if (type === 'boosted' || type === 'replace') {
     return `
       <svg class="pb-icon" width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
         <path d="M6.5 5h7M13.5 5l-2-2M13.5 5l-2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -576,7 +804,7 @@ function renderModeButtons(host) {
     btn.className = 'pb-mode-btn';
     if (item.id === activeId) btn.classList.add('active');
     btn.setAttribute('data-type', item.type);
-    btn.setAttribute('title', `${item.type === 'replace' ? 'Replace prompt' : 'Append to prompt'}: ${item.name}`);
+    btn.setAttribute('title', `${(item.type === 'append') ? 'Append to prompt' : 'Boosted prompt'}: ${item.name}`);
     btn.innerHTML = `
       ${getModeIcon(item.type)}
       <span class="pb-mode-label">${escapeHtml(item.name)}</span>
@@ -600,12 +828,11 @@ function renderModeButtons(host) {
 }
 
 function onModeButtonClick(item) {
-  // Selecting a header button sets it as the active item (persists) AND executes it immediately.
-  dbg('activate and apply header item', { id: item?.id, type: item?.type, name: item?.name });
-  // Apply now (optimistic)
-  applyItemNow(item, { autoSend: true });
-  // Persist selection
-  setActiveItemId(item?.id || null);
+  // Header buttons only select/deselect a mode; they never send or apply immediately.
+  const current = getActiveItemId();
+  const next = current === item.id ? null : item.id;
+  dbg('toggle active item', { prev: current, next });
+  setActiveItemId(next);
 }
 
 /* ========= Existing composer helpers ========= */
@@ -723,21 +950,51 @@ function writePrompt(text) {
 }
 
 function onBoostClick() {
-  if (isProcessing) {
-    return;
-  }
-  const originalPrompt = readPrompt();
-  if (!originalPrompt) {
-    showToast('Type a prompt first, then click Boost Prompt.');
+  if (isProcessing) return;
+
+  // Mode buttons only select/deselect. Boost applies according to the selected item.
+  const active = getActiveItem();
+  if (!active) {
+    showToast('Please select a mode before clicking Boost.');
     return;
   }
 
+  const originalPrompt = readPrompt() || '';
+  const rule = String(active.content || '').trim();
+
+  if (active.type === 'append') {
+    if (!rule) {
+      showToast('Selected Append item is empty.');
+      return;
+    }
+    setProcessingState(true);
+    const finalText = originalPrompt ? `${originalPrompt}\n${rule}` : rule;
+
+    if (currentSettings.previewBeforeSend) {
+      showPreview({
+        originalPrompt,
+        optimizedPrompt: finalText,
+        itemType: 'append',
+        sendAfterChoice: true
+      });
+      return;
+    }
+
+    const ok = writePrompt(finalText);
+    if (!ok) {
+      showToast('Unable to update the chat input field.');
+      setProcessingState(false);
+      return;
+    }
+    pendingHistory.push({ original: originalPrompt, optimized: finalText });
+    setTimeout(() => { sendPrompt(); setProcessingState(false); }, 80);
+    return;
+  }
+
+  // Boosted: call LLM with (rule + originalPrompt), then preview or send
   setProcessingState(true);
   chrome.runtime.sendMessage(
-    {
-      type: 'BOOST_PROMPT',
-      payload: { originalPrompt }
-    },
+    { type: 'BOOST_PROMPT', payload: { originalPrompt, rule } },
     (response) => {
       if (chrome.runtime.lastError) {
         console.error('PromptBooster messaging error:', chrome.runtime.lastError);
@@ -750,13 +1007,26 @@ function onBoostClick() {
         setProcessingState(false);
         return;
       }
+      const optimizedPrompt = String(response.optimizedPrompt || '');
 
-      const optimizedPrompt = response.optimizedPrompt;
       if (currentSettings.previewBeforeSend) {
-        showPreview({ originalPrompt, optimizedPrompt });
-      } else {
-        applyOptimizedPrompt({ originalPrompt, optimizedPrompt, autoSend: true });
+        showPreview({
+          originalPrompt,
+          optimizedPrompt,
+          itemType: 'boosted',
+          sendAfterChoice: true
+        });
+        return;
       }
+
+      const ok = writePrompt(optimizedPrompt);
+      if (!ok) {
+        showToast('Unable to update the chat input field.');
+        setProcessingState(false);
+        return;
+      }
+      pendingHistory.push({ original: originalPrompt, optimized: optimizedPrompt });
+      setTimeout(() => { sendPrompt(); setProcessingState(false); }, 80);
     }
   );
 }
@@ -801,7 +1071,7 @@ function sendPrompt() {
   editor.el.dispatchEvent(keyboardEvent);
 }
 
-function showPreview({ originalPrompt, optimizedPrompt }) {
+function showPreview({ originalPrompt, optimizedPrompt, itemType = 'boosted', sendAfterChoice = false }) {
   removeExistingPreview();
   const composer = findComposer();
   if (!composer) {
@@ -867,10 +1137,37 @@ function showPreview({ originalPrompt, optimizedPrompt }) {
     e.currentTarget.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
   });
 
+  // Collapse when clicking anywhere outside the panel, keep content intact
+  const onOutsidePointer = (evt) => {
+    if (!inline.contains(evt.target)) {
+      inline.setAttribute('data-collapsed', 'true');
+      const toggleBtn = inline.querySelector('[data-action="toggle"]');
+      if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
+    }
+  };
+  document.addEventListener('pointerdown', onOutsidePointer, { capture: true });
+
+  // Allow expanding by clicking the collapsed bar itself
+  inline.addEventListener('click', (evt) => {
+    if (inline.getAttribute('data-collapsed') === 'true') {
+      inline.setAttribute('data-collapsed', 'false');
+      const toggleBtn = inline.querySelector('[data-action="toggle"]');
+      if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'true');
+      evt.stopPropagation();
+    }
+  });
+
+  // Ensure cleanup removes outside listener too
+  const prevCleanup = inline.__pbCleanup;
+  inline.__pbCleanup = () => {
+    try { document.removeEventListener('pointerdown', onOutsidePointer, { capture: true }); } catch {}
+    try { prevCleanup?.(); } catch {}
+  };
+
   // Use Original
   inline.querySelector('[data-action="use-original"]').addEventListener('click', () => {
     removeExistingPreview();
-    applyOptimizedPrompt({ originalPrompt, optimizedPrompt: originalPrompt, autoSend: true });
+    applyOptimizedPrompt({ originalPrompt, optimizedPrompt: originalPrompt, itemType: 'replace', autoSend: !!sendAfterChoice });
   });
 
   // Use Boosted (take edited content if changed)
@@ -878,7 +1175,7 @@ function showPreview({ originalPrompt, optimizedPrompt }) {
     const editedEl = inline.querySelector('[data-testid="promptbooster-edit"]');
     const edited = editedEl ? (editedEl.innerText || editedEl.textContent || '').trim() : optimizedPrompt;
     removeExistingPreview();
-    applyOptimizedPrompt({ originalPrompt, optimizedPrompt: edited || optimizedPrompt, autoSend: true });
+    applyOptimizedPrompt({ originalPrompt, optimizedPrompt: edited || optimizedPrompt, itemType, autoSend: !!sendAfterChoice });
   });
 
   // Collapse+remove animation when native ChatGPT Send is used
@@ -1243,6 +1540,51 @@ function injectStyles() {
     }
     .promptbooster-inline[data-collapsed="true"] .pb-inline__content {
       display: none;
+    }
+    /* Collapsed state: show a small obtuse triangle centered above the input */
+    .promptbooster-inline[data-collapsed="true"] {
+      position: relative;
+      height: 0;                 /* collapse the panel itself */
+      padding: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      margin: 6px 0 10px 0;      /* small gap above input */
+      cursor: pointer;
+      overflow: visible;
+    }
+    .promptbooster-inline[data-collapsed="true"]::after {
+      content: '';
+      position: absolute;
+      top: -11px; /* raise the triangle by ~3mm */
+      left: 50%;
+      transform: translate(-50%, 0);
+      width: 44px;               /* wide base */
+      height: calc(14px + 11px); /* increase height by ~3mm */
+      background: linear-gradient(90deg, #7c4dff, #3f51b5); /* match Use Boosted button */
+      clip-path: polygon(50% 0, 100% 100%, 0 100%); /* downward obtuse triangle */
+      box-shadow: 0 3px 10px rgba(28, 27, 74, 0.25); /* slight shadow */
+      border-radius: 2px;        /* soft corners on base */
+      z-index: 2;
+    }
+    /* Mask any stray line directly above triangle */
+    .promptbooster-inline[data-collapsed="true"]::before {
+      content: '';
+      position: absolute;
+      top: -13px;                /* align just above triangle apex */
+      left: 50%;
+      transform: translateX(-50%);
+      width: 64px;               /* a bit wider than triangle base */
+      height: 3px;               /* cover thin border/line */
+      background: #fff;          /* assumes light composer bg */
+      border-radius: 2px;
+      z-index: 1;
+    }
+    .promptbooster-inline[data-collapsed="true"] .pb-inline__header {
+      display: none;
+    }
+    .promptbooster-inline[data-collapsed="true"] .pb-inline__footer {
+      display: none; /* hide action buttons when collapsed */
     }
     .pb-inline__content {
       padding: 12px;

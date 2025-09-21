@@ -27,15 +27,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleBoostRequest(payload) {
-  const { originalPrompt } = payload;
+  const { originalPrompt, rule } = payload;
   if (!originalPrompt || !originalPrompt.trim()) {
     throw new Error('Prompt is empty.');
   }
 
   const settings = await getSettings();
-  // Optimization style has been removed; build messages without a mode
+  // Build messages for Boosted Prompt; include rule when provided
   const messages = buildChatMessages({
-    originalPrompt
+    originalPrompt,
+    rule
   });
 
   const optimizedPrompt = await callLLM({

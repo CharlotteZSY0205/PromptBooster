@@ -214,7 +214,7 @@ h2 {
   border-radius: 999px;
   color: #4338ca;
 }
-.type-icon.replace { color: #1d4ed8; }
+.type-icon.boosted { color: #4338ca; }
 .type-icon.append  { color: #047857; }
 .opt-icon { width: 14px; height: 14px; }
 
@@ -228,7 +228,7 @@ h2 {
   font-size: 12px;
   color: #4b5563;
 }
-.item-card .item-type.replace { color: #1d4ed8; }
+.item-card .item-type.boosted { color: #4338ca; }
 .item-card .item-type.append { color: #047857; }
 
 .item-actions-row {
@@ -321,10 +321,10 @@ h2 {
   cursor: grab;
   user-select: none;
 }
-.slot-pill.replace {
-  background: rgba(59, 130, 246, 0.10);
-  border-color: rgba(59, 130, 246, 0.35);
-  color: #1d4ed8;
+.slot-pill.boosted {
+  background: rgba(124, 77, 255, 0.10);
+  border-color: rgba(124, 77, 255, 0.35);
+  color: #4338ca;
 }
 .slot-pill.append {
   background: rgba(16, 185, 129, 0.10);

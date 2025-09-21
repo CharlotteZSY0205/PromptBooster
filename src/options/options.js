@@ -28,12 +28,12 @@ const TEMPLATE_MAP = (() => {
   const byId = Object.fromEntries((DEFAULT_SETTINGS.items || []).map(i => [i.id, i]));
   return {
     replace_creative: byId.replace_creative || {
-      type: 'replace',
+      type: 'boosted',
       name: 'Creative',
       content: 'You are a creative writing partner...'
     },
     replace_structured: byId.replace_structured || {
-      type: 'replace',
+      type: 'boosted',
       name: 'Structured',
       content: 'Help me structure this task...'
     },
@@ -167,7 +167,7 @@ function openPromptModal(mode, existingId = null) {
       </div>
       <div class="pb-modal__body">
         <div class="pb-toggle" role="tablist" aria-label="Type">
-          <button type="button" class="pb-toggle__btn" data-type="replace">Replace</button>
+          <button type="button" class="pb-toggle__btn" data-type="boosted">Boosted</button>
           <button type="button" class="pb-toggle__btn" data-type="append">Append</button>
         </div>
         <label class="field">
@@ -176,7 +176,7 @@ function openPromptModal(mode, existingId = null) {
         </label>
         <label class="field">
           <span>Content</span>
-          <textarea id="pb-content" rows="7" placeholder="Enter the text that will replace or be appended"></textarea>
+          <textarea id="pb-content" rows="7" placeholder="Enter your rewrite rule for Boosted, or text to append"></textarea>
         </label>
       </div>
       <div class="pb-modal__footer">
@@ -196,10 +196,10 @@ function openPromptModal(mode, existingId = null) {
   const toggleBtns = [...overlay.querySelectorAll('.pb-toggle__btn')];
   const inputName = overlay.querySelector('#pb-name');
   const inputContent = overlay.querySelector('#pb-content');
-  let currentType = 'replace';
+  let currentType = 'boosted';
 
   function setType(t) {
-    currentType = t === 'append' ? 'append' : 'replace';
+    currentType = t === 'append' ? 'append' : 'boosted';
     toggleBtns.forEach(b => b.classList.toggle('active', b.dataset.type === currentType));
   }
 
@@ -209,7 +209,7 @@ function openPromptModal(mode, existingId = null) {
     inputName.value = item.name || '';
     inputContent.value = item.content || '';
   } else {
-    setType('replace');
+    setType('boosted');
     inputName.value = '';
     inputContent.value = '';
   }
@@ -226,7 +226,7 @@ function openPromptModal(mode, existingId = null) {
       inputName.value = item.name || '';
       inputContent.value = item.content || '';
     } else {
-      setType('replace');
+      setType('boosted');
       inputName.value = '';
       inputContent.value = '';
     }
@@ -257,7 +257,7 @@ function renderItems() {
   const wrap = els.itemsList;
   wrap.innerHTML = '';
   if (!state.items.length) {
-    wrap.textContent = 'No prompts yet. Click “Add” to create a Replace or Append prompt.';
+    wrap.textContent = 'No prompts yet. Click “Add” to create a Boosted or Append prompt.';
     return;
   }
 
@@ -283,7 +283,7 @@ function renderItems() {
 
     const icon = document.createElement('span');
     icon.className = `type-icon ${item.type}`;
-    icon.innerHTML = item.type === 'replace' ? iconReplace() : iconAppend();
+    icon.innerHTML = item.type === 'boosted' ? iconReplace() : iconAppend();
 
     const label = document.createElement('div');
     label.className = 'item-label';
@@ -291,7 +291,7 @@ function renderItems() {
 
     const meta = document.createElement('div');
     meta.className = `item-type ${item.type}`;
-    meta.textContent = item.type === 'replace' ? 'Replace' : 'Append';
+    meta.textContent = item.type === 'boosted' ? 'Boosted' : 'Append';
 
     const actions = document.createElement('div');
     actions.className = 'item-actions-row';
@@ -453,7 +453,7 @@ function renderBindings() {
 
     const icon = document.createElement('span');
     icon.className = 'pill-icon';
-    icon.innerHTML = item.type === 'replace' ? iconReplace() : iconAppend();
+    icon.innerHTML = item.type === 'boosted' ? iconReplace() : iconAppend();
 
     const name = document.createElement('span');
     name.className = 'pill-name';
