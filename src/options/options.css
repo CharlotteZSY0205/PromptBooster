@@ -195,14 +195,14 @@ h2 {
   row-gap: 4px;
   align-items: center;
   padding: 10px 12px;
-  border: 1px solid rgba(124, 77, 255, 0.22);
+  border: 1px solid transparent;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.95);
   box-shadow: 0 6px 22px rgba(30, 27, 75, 0.10);
 }
 .item-card.top3 {
   background: rgba(124, 77, 255, 0.06);
-  border-color: rgba(124, 77, 255, 0.35);
+  border-color: transparent;
 }
 
 .item-card .type-icon {
@@ -242,14 +242,16 @@ h2 {
 .btn.small {
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(67, 56, 202, 0.3);
+  border: 1px solid transparent; /* no border lines for small buttons */
   background: rgba(255, 255, 255, 0.9);
   cursor: pointer;
   font-weight: 600;
+  font-size: 0.85rem; /* slightly smaller label */
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
 }
 .btn.small:focus { outline: none; box-shadow: 0 0 0 2px rgba(124,77,255,0.25); }
-.btn.small:hover { transform: translateY(-1px); }
-.btn.small.danger { border-color: rgba(220, 38, 38, 0.35); color: #b91c1c; }
+.btn.small:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(28,27,74,0.08); }
+.btn.small.danger { border-color: transparent; color: #b91c1c; background: rgba(220,38,38,0.08); }
 
 /* Drag handle (far right) */
 .drag-handle {
@@ -384,14 +386,14 @@ h2 {
   margin-bottom: 8px;
 }
 .primary.outline {
-  background: transparent;
+  background: rgba(124, 77, 255, 0.12); /* idle background color */
   color: #4338ca;
-  border: 1px solid rgba(67, 56, 202, 0.35);
+  border: 1px solid transparent; /* remove border lines */
   box-shadow: none;
   padding: 8px 16px;
 }
 .primary.outline:hover {
-  background: rgba(124, 77, 255, 0.08);
+  background: rgba(124, 77, 255, 0.18);
   transform: translateY(-1px);
 }
 
@@ -480,3 +482,14 @@ h2 {
 /* Drag states for list reordering */
 .item-card.dragging { opacity: 0.6; }
 .item-card.dragover { outline: 2px dashed rgba(124, 77, 255, 0.45); outline-offset: 2px; }
+
+/* My Prompts positioning */
+.prompts-card { position: relative; }
+.prompts-card .manager-left { position: relative; }
+.prompts-card .add-fab {
+  position: absolute;
+  right: 6px;        /* slightly to the right of the items container */
+  top: -41px;        /* moved ~3mm downward from previous (-52px → -41px) */
+  z-index: 3;
+}
+.prompts-card .items-list { margin-top: 8px; }

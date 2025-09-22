@@ -50,19 +50,17 @@
         </footer>
       </form>
 
-      <section class="card" id="quick-buttons-config">
-        <div class="section-header">
-          <h2>My Prompts</h2>
-          <button type="button" id="addItemBtn" class="primary outline">Add</button>
-        </div>
-        <p class="subtitle">Manage your Boosted and Append prompts. Drag to reorder; top 3 appear as buttons above the input.</p>
+      <section class="card prompts-card" id="quick-buttons-config">
+        <h2>My Prompts</h2>
+        <p class="top3-hint">Drag to reorder. Top 3 appear as buttons above the input.</p>
 
         <div class="manager-grid">
           <div class="manager-left">
-            <p class="top3-hint">The top 3 prompts will appear as buttons above the input box.</p>
+            <button type="button" id="addItemBtn" class="primary add-fab">Add</button>
             <div id="itemsList" class="items-list" aria-live="polite"></div>
           </div>
         </div>
+
       </section>
 
       <section class="help card">

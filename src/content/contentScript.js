@@ -793,6 +793,28 @@ function renderModeButtons(host) {
   host.setAttribute('data-sig', nextSig);
 
   host.innerHTML = '';
+
+  // Settings gear (always visible) - opens Options, placed left of first button
+  (function () {
+    const gearBtn = document.createElement('button');
+    gearBtn.type = 'button';
+    gearBtn.className = 'pb-gear-btn';
+    gearBtn.setAttribute('aria-label', 'Open PromptBooster Settings');
+    gearBtn.setAttribute('title', 'Open PromptBooster Settings');
+    gearBtn.innerHTML = `
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M8.25 2.75h3.5l.45 1.8c.2.03.39.08.57.14l1.62-1.06 2.47 2.47-1.06 1.62c.06.18.11.37.14.57l1.8.45v3.5l-1.8.45c-.03.2-.08.39-.14.57l1.06 1.62-2.47 2.47-1.62-1.06a4.8 4.8 0 0 1-.57.14l-.45 1.8h-3.5l-.45-1.8a4.8 4.8 0 0 1-.57-.14l-1.62 1.06-2.47-2.47 1.06-1.62a4.8 4.8 0 0 1-.14-.57l-1.8-.45v-3.5l1.8-.45c.03-.2.08-.39.14-.57L3.14 6.1 5.61 3.64l1.62 1.06c.18-.06.37-.11.57-.14l.45-1.8ZM10 7.25A2.75 2.75 0 1 0 10 12.75 2.75 2.75 0 0 0 10 7.25Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      </svg>
+    `;
+    gearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try {
+        chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS' }, () => {});
+      } catch {}
+    });
+    host.appendChild(gearBtn);
+  })();
+
   if (buttons.length === 0) {
     dbg('no bound buttons to render');
   }
@@ -824,6 +846,7 @@ function renderModeButtons(host) {
       setActiveItemId(null);
     });
     host.appendChild(clearBtn);
+
   }
 }
 
@@ -970,15 +993,7 @@ function onBoostClick() {
     setProcessingState(true);
     const finalText = originalPrompt ? `${originalPrompt}\n${rule}` : rule;
 
-    if (currentSettings.previewBeforeSend) {
-      showPreview({
-        originalPrompt,
-        optimizedPrompt: finalText,
-        itemType: 'append',
-        sendAfterChoice: true
-      });
-      return;
-    }
+    /* Append never shows the review panel; always write and send immediately */
 
     const ok = writePrompt(finalText);
     if (!ok) {
@@ -1381,17 +1396,48 @@ function injectStyles() {
     }
     .pb-clear-active {
       margin-left: 8px;
-      padding: 4px 10px;
+      padding: 6px 12px;
       border-radius: 999px;
-      border: 1px solid rgba(107,114,128,0.4);
-      background: rgba(107,114,128,0.1);
-      color: #374151;
+      border: 1px solid transparent; /* consistent with other buttons */
+      background: var(--pb-neutral-bg); /* neutral idle like mode buttons */
+      color: var(--pb-text);
       font-weight: 600;
       font-size: 12px;
       cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
     }
     .pb-clear-active:hover {
-      background: rgba(107,114,128,0.18);
+      transform: translateY(-1px);
+      box-shadow: var(--pb-hover-shadow);
+    }
+    .pb-clear-active:focus-visible {
+      outline: 2px solid #7c4dff;
+      outline-offset: 2px;
+    }
+    /* Small settings gear placed to the right of Clear */
+    .pb-gear-btn {
+      margin-left: 22px; /* 再向右移约3mm */
+      margin-right: 4px; /* 与右侧按钮的间距更紧凑 */
+      width: 36px;  /* 直径+约2mm */
+      height: 36px; /* 直径+约2mm */
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #6b7280;
+      cursor: pointer;
+      transition: box-shadow 0.15s ease, transform 0.15s ease, color 0.15s ease;
+    }
+    .pb-gear-btn:hover {
+      color: #374151;
+      box-shadow: 0 2px 8px rgba(28,27,74,0.08);
+      transform: translateY(-1px);
+    }
+    .pb-gear-btn:focus-visible {
+      outline: 2px solid #7c4dff;
+      outline-offset: 2px;
     }
     .promptbooster-original-note {
       margin-top: 8px;
@@ -1556,28 +1602,29 @@ function injectStyles() {
     .promptbooster-inline[data-collapsed="true"]::after {
       content: '';
       position: absolute;
-      top: -11px; /* raise the triangle by ~3mm */
+      top: -12px; /* ~3mm above the composer */
       left: 50%;
       transform: translate(-50%, 0);
-      width: 44px;               /* wide base */
-      height: calc(14px + 11px); /* increase height by ~3mm */
-      background: linear-gradient(90deg, #7c4dff, #3f51b5); /* match Use Boosted button */
-      clip-path: polygon(50% 0, 100% 100%, 0 100%); /* downward obtuse triangle */
-      box-shadow: 0 3px 10px rgba(28, 27, 74, 0.25); /* slight shadow */
-      border-radius: 2px;        /* soft corners on base */
+      width: 64px;               /* wider base for a clear obtuse shape */
+      height: 26px;              /* increased height by ~3mm */
+      background: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='26' viewBox='0 0 64 26'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='0'><stop offset='0' stop-color='%237c4dff'/><stop offset='1' stop-color='%233f51b5'/></linearGradient></defs><polygon points='32,0 64,26 0,26' fill='url(%23g)' stroke='url(%23g)' stroke-linejoin='round' stroke-width='2'/></svg>");
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+      filter: drop-shadow(0 3px 10px rgba(28, 27, 74, 0.25)); /* subtle shadow */
       z-index: 2;
     }
     /* Mask any stray line directly above triangle */
     .promptbooster-inline[data-collapsed="true"]::before {
       content: '';
       position: absolute;
-      top: -13px;                /* align just above triangle apex */
+      top: -16px;                /* slightly higher mask to hide any stray line */
       left: 50%;
       transform: translateX(-50%);
-      width: 64px;               /* a bit wider than triangle base */
-      height: 3px;               /* cover thin border/line */
+      width: 72px;               /* wider than triangle base */
+      height: 4px;               /* a bit thicker to ensure coverage */
       background: #fff;          /* assumes light composer bg */
-      border-radius: 2px;
+      border-radius: 3px;
       z-index: 1;
     }
     .promptbooster-inline[data-collapsed="true"] .pb-inline__header {
