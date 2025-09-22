@@ -109,6 +109,14 @@ h2 {
   transform: translateY(-1px);
 }
 
+/* Remove glow/shadow for Add button in My Prompts */
+.prompts-card .add-fab {
+  box-shadow: none !important;
+}
+.prompts-card .add-fab:hover {
+  box-shadow: none !important;
+}
+
 #status {
   min-height: 1.2rem;
   font-size: 0.9rem;
