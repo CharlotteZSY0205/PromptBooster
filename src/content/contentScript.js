@@ -460,7 +460,7 @@ function ensureEnterWiring() {
   // Global capture listeners to preempt native handlers that may fire before editor-level listeners
   if (!document.__pbDocEnterWired) {
     const globalHandler = (e) => {
-      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+      if (e.key !== 'Enter' || !e.altKey || e.isComposing) return;
 
       const active = getActiveItem();
       if (!active) return; // no selection -> let native proceed
@@ -512,7 +512,7 @@ function ensureEnterWiring() {
 
     // Guard extra phases some UIs listen on
     const swallow = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && getActiveItem()) {
+      if (e.key === 'Enter' && e.altKey && !e.isComposing && getActiveItem()) {
         e.preventDefault();
         if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
         e.stopPropagation();
@@ -531,8 +531,8 @@ function ensureEnterWiring() {
   if (editorRef.el.__pbEnterWired) return;
 
   const handler = (e) => {
-    // Only intercept plain Enter (no Shift), and only when a mode is selected
-    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    // Only intercept Option/Alt+Enter, and only when a mode is selected
+    if (e.key !== 'Enter' || !e.altKey || e.isComposing) return;
 
     const active = getActiveItem();
     if (!active) return; // no selection -> let native send proceed
@@ -650,102 +650,8 @@ function applyItemNow(item, { autoSend = true } = {}) {
   return true;
 }
 
-let activeSendWired = false;
-function ensureActiveSendWiring() {
-  if (activeSendWired) return;
-  const composer = findComposer();
-  if (!composer) return;
-
-  const sendBtn = findSendButton(composer);
-  const editorRef = findEditor();
-
-  const intercept = (e) => {
-    const active = getActiveItem();
-    if (!active) return; // No selection -> let native send proceed
-
-    // Intercept native send
-    e?.preventDefault?.();
-    e?.stopPropagation?.();
-
-    if (active.type === 'append') {
-      // Append immediately and auto-send
-      const current = readPrompt();
-      const add = String(active.content || '').trim();
-      const nextText = current ? (add ? `${current}\n${add}` : current) : add;
-      const ok = writePrompt(nextText);
-      if (!ok) {
-        showToast('Unable to update the chat input field.');
-        return;
-      }
-      sendPrompt();
-      return;
-    }
-
-    // Replace -> call LLM
-    const originalPrompt = readPrompt() || '';
-    if (currentSettings.previewBeforeSend) {
-      setProcessingState(true);
-      chrome.runtime.sendMessage(
-        { type: 'BOOST_PROMPT', payload: { originalPrompt } },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            console.error('PromptBooster messaging error:', chrome.runtime.lastError);
-            showToast('Prompt boosting failed to start. Try again in a moment.');
-            setProcessingState(false);
-            return;
-          }
-          if (!response?.ok) {
-            showToast(response?.error || 'Prompt boosting failed.');
-            setProcessingState(false);
-            return;
-          }
-          const optimizedPrompt = String(response.optimizedPrompt || '');
-          // Show comparison panel; on choice, send afterwards
-          showPreview({ originalPrompt, optimizedPrompt, itemType: 'replace', sendAfterChoice: true });
-        }
-      );
-    } else {
-      // No preview: replace immediately and auto-send
-      setProcessingState(true);
-      chrome.runtime.sendMessage(
-        { type: 'BOOST_PROMPT', payload: { originalPrompt } },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            console.error('PromptBooster messaging error:', chrome.runtime.lastError);
-            showToast('Prompt boosting failed to start. Try again in a moment.');
-            setProcessingState(false);
-            return;
-          }
-          if (!response?.ok) {
-            showToast(response?.error || 'Prompt boosting failed.');
-            setProcessingState(false);
-            return;
-          }
-          const optimizedPrompt = String(response.optimizedPrompt || '');
-          applyOptimizedPrompt({ originalPrompt, optimizedPrompt, itemType: 'replace', autoSend: true });
-        }
-      );
-    }
-  };
-
-  if (sendBtn) {
-    sendBtn.addEventListener('click', intercept, { capture: true });
-  }
-
-  if (editorRef?.el) {
-    editorRef.el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        intercept(e);
-      }
-    }, { capture: true });
-  }
-
-  composer.addEventListener('submit', (e) => {
-    intercept(e);
-  }, { capture: true });
-
-  activeSendWired = true;
-}
+/* Removed ensureActiveSendWiring: Enter and the native Send button must always send the original prompt.
+   Modified/boosted sending is only triggered via Option/Alt+Enter when a mode is selected. */
 
 function getModeIcon(type) {
   // Boosted (previously "replace"): circular swap arrows
