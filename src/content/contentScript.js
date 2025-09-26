@@ -184,6 +184,8 @@ function setupComposerObserver() {
   observer.observe(document.body, { childList: true, subtree: true });
   // Ensure Enter-key interception wiring is present
   try { ensureEnterWiring(); } catch {}
+  // Ensure Option+Enter keyboard shortcut is set up
+  try { ensureBoostKeyboardShortcut(); } catch {}
 
   // Retry for a short window on fresh loads
   const start = Date.now();
@@ -191,6 +193,7 @@ function setupComposerObserver() {
     ensureBoostButton();
     ensureModeButtons();
     try { ensureEnterWiring(); } catch {}
+    try { ensureBoostKeyboardShortcut(); } catch {}
     if (Date.now() - start > 10000) {
       clearInterval(retry);
     }
@@ -199,6 +202,7 @@ function setupComposerObserver() {
   ensureBoostButton();
   ensureModeButtons();
   try { ensureEnterWiring(); } catch {}
+  try { ensureBoostKeyboardShortcut(); } catch {}
 }
 
 function setupMessageObserver() {
@@ -445,7 +449,10 @@ function getActiveItemId() {
 async function setActiveItemId(id) {
   const next = { ...currentSettings, activeItemId: id || null };
   currentSettings = await saveSettings(next);
-  try { ensureModeButtons(); } catch {}
+  // Defer re-rendering to avoid destroying buttons during click event processing
+  setTimeout(() => {
+    try { ensureModeButtons(); } catch {}
+  }, 0);
 }
 
 function getActiveItem() {
@@ -453,6 +460,110 @@ function getActiveItem() {
   if (!id) return null;
   const items = Array.isArray(currentSettings?.items) ? currentSettings.items : [];
   return items.find(i => i.id === id) || null;
+}
+
+// Set up Option+Enter keyboard shortcut to trigger Boost Prompt functionality
+function ensureBoostKeyboardShortcut() {
+  // Avoid double-wiring the global shortcut
+  if (document.__pbBoostShortcutWired) return;
+
+  const globalBoostHandler = (e) => {
+    // Check for Option+Enter (Alt+Enter on Windows, Option+Enter on Mac)
+    if (e.key !== 'Enter' || !e.altKey || e.isComposing) return;
+
+    const composer = findComposer();
+    if (!composer || !composer.contains(e.target)) return; // only intercept events within composer
+
+    // Check if we're already processing or if there's an active item (which would be handled by existing Alt+Enter logic)
+    if (isProcessing) return;
+    
+    const active = getActiveItem();
+    if (active) return; // let existing Alt+Enter logic handle this
+
+    // Intercept the event to prevent default behavior
+    e.preventDefault();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    e.stopPropagation();
+
+    // Implement boost functionality directly (like onBoostClick but without requiring a selected mode)
+    const originalPrompt = readPrompt() || '';
+    if (!originalPrompt.trim()) {
+      showToast('Please enter a prompt to boost.');
+      return;
+    }
+
+    // Use the first available boosted item as default, or a generic boost rule
+    const items = Array.isArray(currentSettings?.items) ? currentSettings.items : [];
+    const defaultBoostItem = items.find(item => item.type === 'boosted') || {
+      content: 'Improve and enhance this prompt to be more clear, specific, and effective while maintaining the original intent.'
+    };
+    
+    const rule = String(defaultBoostItem.content || '').trim();
+    if (!rule) {
+      showToast('No boost rule available.');
+      return;
+    }
+
+    // Call LLM to boost the prompt
+    setProcessingState(true);
+    chrome.runtime.sendMessage(
+      { type: 'BOOST_PROMPT', payload: { originalPrompt, rule } },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('PromptBooster messaging error:', chrome.runtime.lastError);
+          showToast('Prompt boosting failed to start. Try again in a moment.');
+          setProcessingState(false);
+          return;
+        }
+        if (!response?.ok) {
+          showToast(response?.error || 'Prompt boosting failed.');
+          setProcessingState(false);
+          return;
+        }
+        const optimizedPrompt = String(response.optimizedPrompt || '');
+
+        if (currentSettings.previewBeforeSend) {
+          showPreview({
+            originalPrompt,
+            optimizedPrompt,
+            itemType: 'boosted',
+            sendAfterChoice: true
+          });
+          return;
+        }
+
+        const ok = writePrompt(optimizedPrompt);
+        if (!ok) {
+          showToast('Unable to update the chat input field.');
+          setProcessingState(false);
+          return;
+        }
+        pendingHistory.push({ original: originalPrompt, optimized: optimizedPrompt });
+        setTimeout(() => { sendPrompt(); setProcessingState(false); }, 80);
+      }
+    );
+  };
+
+  // Add global capture listeners
+  document.addEventListener('keydown', globalBoostHandler, { capture: true });
+  window.addEventListener('keydown', globalBoostHandler, { capture: true });
+
+  // Guard extra phases to prevent any interference
+  const swallowBoostShortcut = (e) => {
+    if (e.key === 'Enter' && e.altKey && !e.isComposing && !getActiveItem()) {
+      const composer = findComposer();
+      if (composer && composer.contains(e.target)) {
+        e.preventDefault();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+        e.stopPropagation();
+      }
+    }
+  };
+  document.addEventListener('keypress', swallowBoostShortcut, { capture: true });
+  document.addEventListener('keyup', swallowBoostShortcut, { capture: true });
+
+  document.__pbBoostShortcutWired = true;
+  dbg('Option+Enter boost shortcut wired');
 }
 
 // Intercept Enter to send boosted/appended prompt when a mode is selected
@@ -1163,7 +1274,7 @@ function updateButtonTooltip() {
   if (!boostButton) {
     return;
   }
-  boostButton.title = 'Boost prompt';
+  boostButton.title = 'Boost prompt (⌥+⏎)';
 }
 
 function showToast(message) {
